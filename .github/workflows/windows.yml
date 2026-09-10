@@ -1,0 +1,23 @@
+name: Windows build and tests
+on: [push, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Build tested installer
+        shell: pwsh
+        run: ./tools/build_windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KajovoKarty-Windows
+          path: |
+            dist/installer/*.exe
+            docs/windows-test-results.xml
+            docs/windows-installer-sha256.txt

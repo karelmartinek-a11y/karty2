@@ -1,0 +1,22 @@
+Type,"Booking number",Check-in,Checkout,"Guest name","Payments service provider","Reservation status",Currency,"Payment status",Amount,"Payout date","Payout ID"
+Reservation,5854313379,"Aug 16, 2026","Aug 19, 2026","Sandra Pinto","Booking.com B.V.",ok,EUR,"Paid Online",314.98,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,5196511900,"Aug 17, 2026","Aug 19, 2026","Daniel Laur","Booking.com B.V.",ok,EUR,"Paid Online",137.40,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,5089458650,"Aug 15, 2026","Aug 19, 2026","Marcela Dufková","Booking.com B.V.",ok,EUR,"Paid Online",294.52,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,6103329902,"Aug 15, 2026","Aug 17, 2026","Young Mi Lee Cho","Booking.com B.V.",ok,EUR,"Paid Online",119.52,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,6893944733,"Aug 14, 2026","Aug 16, 2026","Josef Erlebach","Booking.com B.V.",ok,EUR,"Paid Online",156.18,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,5603630859,"Aug 15, 2026","Aug 16, 2026","Martin Stařický","Booking.com B.V.",ok,EUR,"Paid Online",111.15,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,5559686870,"Aug 13, 2026","Aug 16, 2026","Bernd Guenther","Booking.com B.V.",ok,EUR,"Paid Online",184.82,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,5506485258,"Aug 15, 2026","Aug 16, 2026","Frederikus van Hulst","Booking.com B.V.",ok,EUR,"Paid Online",106.93,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,5154998197,"Aug 14, 2026","Aug 16, 2026","Milan Pozemka","Booking.com B.V.",ok,EUR,"Paid Online",176.84,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,6728402354,"Aug 14, 2026","Aug 15, 2026","Denisa Nesrstová","Booking.com B.V.",ok,EUR,"Paid Online",73.87,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,6193186218,"Aug 12, 2026","Aug 15, 2026","Dr. Haneen Vasel","Booking.com B.V.",ok,EUR,"Paid Online",450.38,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,5590468311,"Aug 10, 2026","Aug 15, 2026","Declan Corry","Booking.com B.V.",ok,EUR,"Paid Online",329.96,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,6868209144,"Aug 13, 2026","Aug 14, 2026","Пущик Александр","Booking.com B.V.",ok,EUR,"Paid Online",122.79,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,6650495692,"Aug 13, 2026","Aug 14, 2026","Martina Krylová","Booking.com B.V.",ok,EUR,"Paid Online",61.20,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,6376100613,"Aug 13, 2026","Aug 14, 2026","Markéta Křelovcová","Booking.com B.V.",ok,EUR,"Paid Online",84.70,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,6098751556,"Aug 11, 2026","Aug 14, 2026","Radka Zilikova","Booking.com B.V.",ok,EUR,"Paid Online",381.54,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,5735919743,"Aug 11, 2026","Aug 14, 2026","Haruka Kogure","Booking.com B.V.",ok,EUR,"Paid Online",120.30,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,5441131435,"Aug 12, 2026","Aug 14, 2026","Danny Kanter","Booking.com B.V.",ok,EUR,"Paid Online",261.70,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,6890093545,"Aug 10, 2026","Aug 13, 2026","Klaus Clausener","Booking.com B.V.",ok,EUR,"Paid Online",215.25,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,6289288299,"Aug 10, 2026","Aug 13, 2026","Melaniia Zahuralska","Booking.com B.V.",ok,EUR,"Paid Online",335.10,"Aug 20, 2026",tNEPNTeZmpEbamXq
+Reservation,6089384489,"Aug 7, 2026","Aug 10, 2026","Alejandro Javier Moro Martinez","Booking.com B.V.",ok,EUR,"Paid Online",-83.49,"Aug 20, 2026",tNEPNTeZmpEbamXq
