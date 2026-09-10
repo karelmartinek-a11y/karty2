@@ -8,7 +8,7 @@ Automatika se spouští pouze výslovným tlačítkem **Automaticky spárovat v�
 
 Každá platná jednoznačná skupina se uloží samostatnou atomickou transakcí. Běh pokračuje do ustálení; žádné potvrzování jednotlivých shod. Nejednoznačnost, chybějící důkaz, odlišná měna či nenulový rozdíl nikdy nejsou důvodem ke zmírnění pravidel. Úspěšný běh neznamená, že lze automaticky vyřídit každou položku.
 
-Po dokončení, zrušení i zachytitelné chybě se otevře nezablokující výsledek. Rozlišuje analyzované zdrojové listy, nově vyřízené listy, vytvořené skupiny a zbývající nevyřízené řádky; uvádí CZK a EUR samostatně, počty podle pravidel a důvody zbývajících samostatných položek. Výsledek je trvale uložen v operaci a znovu dostupný přes **Nastavení → operace AUTO_MATCH → detail**. Zrušení zachová již zapsané skupiny a označí výsledek jako neustálený. Nový běh vyžaduje další stisk tlačítka.
+Po dokončení, zrušení i zachytitelné chybě se otevře nezablokující výsledek. Rozlišuje zdrojové listy ve vstupním snímku, nově vyřízené listy, vytvořené skupiny a zbývající nevyřízené řádky; uvádí CZK a EUR samostatně, počty podle pravidel a důvody zbývajících samostatných položek. Výsledek je trvale uložen v operaci a znovu dostupný přes **Nastavení → operace AUTO_MATCH → detail**. Zrušení zachová již zapsané skupiny a označí výsledek jako neustálený. Nový běh vyžaduje další stisk tlačítka.
 
 ## Doložené nálezy a opravy
 
@@ -35,7 +35,7 @@ A vyžaduje správnou SALE/REVERSAL dvojici, terminal/SEQ, maskovanou kartu a au
 
 B je ověřeno na 1:1, 1:N, N:1, N:N a záporných částkách. Dvě stejně možné shody zůstávají nevyřízené; rozdíl jednoho centu se nepřijme. Při limitu se zahodí celá neúplně prohledaná komponenta. C_STRONG stále vyžaduje stupeň 1 na obou stranách; nejednoznačná silná hrana se neobchází C_WEAK. D vyžaduje prokázanou absenci B, READY a jednoznačný opačný pár. Ruční skupiny ani jejich potomci nejsou vstupy automatiky.
 
-Nové testy: `tests/test_auto_forensic.py` (27 případů) a `tests/test_auto_ui.py` (2 případy). Původní tři reprodukce chyb lifecycle/cancel skutečně selhaly před opravou. Celá lokální sada poté: **149 PASS, 0 fail, 0 error, 0 skip, 145,03 s** (`auto-regression-results.xml`). Po následné opravě Windows uzavírání spojení a UTF‑8 znovu prošly cílené testy migrace a přesunu. Prošly Ruff F a `git diff --check`.
+Nové testy: `tests/test_auto_forensic.py` (27 případů) a `tests/test_auto_ui.py` (2 případy). Původní tři reprodukce chyb lifecycle/cancel skutečně selhaly před opravou. Celá lokální sada poté: **149 PASS, 0 fail, 0 error, 0 skip, 57,71 s** (`auto-regression-results.xml`). Po následné opravě Windows uzavírání spojení a UTF‑8 znovu prošly cílené testy migrace a přesunu. Prošly Ruff F a `git diff --check`.
 
 ```bash
 QT_QPA_PLATFORM=offscreen python -m pytest -q --junitxml=docs/auto-regression-results.xml
@@ -46,4 +46,4 @@ python tools/package_repo.py
 
 Ověřeno lokálně na Linuxu, CPython 3.12.14, PySide6 6.8.3; helper testy používají lokální kontraktní HTTP data, nikoli živý BetterHotel. Výsledky nenahrazují provozní akceptaci živého hotelového API. Při selhání disku, které znemožní i zápis terminálního stavu, aplikace nehlásí úspěch; zbytek RUNNING označí existující obnova při příštím startu jako INTERRUPTED. Oprava nemění finanční částky, ruční členství mimo explicitní operace ani obsah původních fixtures.
 
-Předchozí Windows CI 0.3.0: běh `34507136528` skončil 3 fail / 19 error (kódování, otevřené kopie databáze a timeout GUI). Nebyl vydáván za úspěšný instalátor. Stav CI verze 0.3.1 bude ověřen po publikaci tohoto commitu.
+Předchozí Windows CI 0.3.0: běh `34507136528` skončil 3 fail / 19 error (kódování, otevřené kopie databáze a timeout GUI). Nebyl vydáván za úspěšný instalátor. První Windows běh 0.3.1 `34511151913` potvrdil opravy kódování a databází: 147 PASS, 2 timeouty UI. Diagnostický pokus nad stejným importovaným ročním pokladním souborem naměřil dotaz v pracovním vlákně 0,031 s při běžném čekání, 3,461 s při smyčce `QTest.qWait` a 0,021 s při `processEvents` + `time.sleep(0.01)`. Testovací smyčka brzdila získání GIL pracovním vláknem. Její čekání nyní uvolňuje GIL, přičemž osmivteřinový limit a všechny aserce zůstávají zachované. Další Windows CI ověřuje tuto opravu testovací synchronizace.

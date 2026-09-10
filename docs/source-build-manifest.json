@@ -1,5 +1,5 @@
 {
-  "source_build_sha256": "f88d17ffd5165299562a584b42bbc849fe402fcbd51f728047dc4e0f5f7cb49e",
+  "source_build_sha256": "c3e199c41b4b669b950ca7801d8576524ed427efc9e9ab2abc4b383a9bc6247a",
   "algorithm": "SHA256 of canonical sorted input-path to SHA256 mapping",
   "files": {
     "src/kajovokarty/__init__.py": "af8c4016284e7fbd96f530fe969322ea7b564932933f64a5cca3f5cad92345b2",
@@ -71,7 +71,7 @@
     "tests/test_column_filters.py": "460e1486866710f5097ba92f1301ad2f3471e23b81db599d90964aefd36e8128",
     "tests/test_completion.py": "984b1ba508a099e34ef50a5dd473d17a7e434d842ef968fd5fdc069aaa54558c",
     "tests/test_domain.py": "e25b9d6a15532d3a6c32dc638aba1c63176a9496f9bb4658ebaa27f2d793efce",
-    "tests/test_gui.py": "77aa879cbf1e508bff66db4e260c1b6762b5dd2d8c910b893b7935d6b45bc14f",
+    "tests/test_gui.py": "b73f3a45ba7ad3cc1e97f7b8500d97650431e9cdc11bce7489e9af1f8ae8de13",
     "tests/test_imports.py": "330b544b16179ad7d630f3004c49f45948e72b2de6a12ce990b7377438c52a9e",
     "tests/test_pairing_drag.py": "1688522f1a69d1c157a5a9b0a7ee0e992dbf4e2bdc3baf09af4afe31fc7ed482",
     "tests/test_pairing_ui.py": "a685aeb70cf4b5e0a3d6f7d5c0043400062332952cfae6b522e4633ae185d702",
