@@ -14,6 +14,26 @@ from kajovokarty.infrastructure.export import export
 from kajovokarty.domain.core import AppError
 
 
+def report_filters(filters, scope, report):
+    """Header filters belong to a view's row schema, not the report catalog."""
+    result = dict(filters)
+    financial = {"unresolved", "resolved", "cashbook_cards", "terminal", "booking"}
+    compatible = (
+        scope in (0, 1, 4)
+        and report in financial
+        or scope == 3
+        and report == "helpers"
+        or scope == 6
+        and report == "audit"
+    )
+    columns = result.pop("column_filters", {})
+    if compatible:
+        result["column_filters"] = columns
+    elif scope == 2 and report == "import_errors":
+        result["import_columns"] = columns
+    return result
+
+
 def export_dialog(window, report=None, ids=None):
     from kajovokarty.ui.main import REPORT_NAMES
 
@@ -88,7 +108,7 @@ def export_dialog(window, report=None, ids=None):
     layout.addWidget(buttons)
     if not d.exec():
         return
-    filters = window.filters()
+    filters = report_filters(window.filters(), window.scope, report)
     if report == "helpers":
         if window.helper_history:
             ctx, gen = window.helper_history

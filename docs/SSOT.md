@@ -685,21 +685,24 @@ V detailu je „Znovu povolit automatické spojení“. Potlačení se vztahuje 
 
 ### 9.4 Ruční příkazy
 
+Aktualizace UI 0.3.0 na základě požadavku na přímé přetahování a úpravy členů. Finanční invarianty, přesná nula a algoritmy A–D zůstávají závazné.
+
 Pracovní výběr je perzistentní sada ID+revision aktuálních nevyřízených kořenů; lze ji doplňovat napříč obrazovkami a filtry. Výběr není finanční členství. Skrytí filtry jej nesmí odstranit. UI vždy ukazuje počet vybraných mimo právě viditelný filtr. Před potvrzením se výběr znovu ověří. Zastaralá položka se označí a akce se odmítne, nikoli tiše vypustí.
 
 | Příkaz | Předpoklady | Atomický výsledek |
 |---|---|---|
 | Vytvořit skupinu | >=2 různých nevyřízených kořenů jedné měny | Nový MANUAL rodič, děti zachovány; nula = Vyřízeno, jinak Nevyřízeno |
 | Spárovat / uzavřít | Totéž + přesný rozdíl 0 | Tentýž doménový příkaz; nenulový výběr nelze označit za vyřízený |
-| Přidat do skupiny | Otevřená kořenová skupina + >=1 další nevyřízený kořen stejné měny | Přidat přímé děti, zvýšit revision, přepočítat; žádné rozploštění podskupin |
+| Přidat / přesunout do skupiny | Aktivní cílová skupina, známé revize objektů a jejich rodičů, stejná měna | Atomicky přesunout přímé členy, přepočítat všechny dotčené skupiny; podskupiny zachovány |
+| Vyjmout označené členy | Aktivní členové a známé revize rodičů | Uvolnit označené členy; prázdné a jednočlenné skupiny zrušit a zbývající dítě povýšit |
 | Rozpojit nadřazené párování | Zvolený objekt má aktivního rodiče | Rozložit jeho přímého rodiče na všechny přímé děti; vnořené podskupiny zůstanou |
 | Rozložit skupinu | Zvolená aktivní kořenová skupina | Deaktivovat její přímá členství, skupinu označit DISSOLVED, děti se stanou kořeny |
 | Upravit poznámku | Aktivní skupina a známá revision | Změnit pouze volitelnou poznámku, do 10 000 znaků; prázdná povolena |
 | Zobrazit důkaz | Existující nebo historická skupina | Read-only výpis stromu, jedinečných listů a součtu |
 
-Rozložení vnořené skupiny je zakázáno, dokud se explicitně nerozpojí její nadřazené párování; UI nabídne tuto cestu. Tím se nemění vnitřek aktivního rodiče skrytým příkazem. Uzavřená skupina se pro úpravu členů nejprve rozloží; poznámku lze upravit přímo. Neexistuje „odpojit jediné dítě a nechat neplatného rodiče s jedním členem“.
+Párovací plocha dovoluje explicitně vyjmout nebo přesunout jednotlivé přímé členy, včetně členů vyřízené či vnořené skupiny. Změna může vyřízenou skupinu znovu otevřít, pokud rozdíl přestane být přesně nula. Přesun celé již vyřízené kořenové skupiny do další skupiny se odmítne; upravují se její členové. Prázdné a jednočlenné skupiny se v téže transakci označí DISSOLVED; případný zbývající člen převezme jejich místo. Vnořené podskupiny se nerozplošťují. Žádný neplatný jednočlenný rodič nezůstane. Původní strom a automatický důkaz se archivují; změněná aktivní skupina přejde na MANUAL a dřívější automatický fingerprint se potlačí. Znovu povolit automatické spojení je samostatná vratná akce a samo automatiku nespouští.
 
-Pro vytvoření nevyřízené skupiny není povinný komentář ani zvláštní schvalovací stav. Po úspěchu se spotřebované objekty odeberou z pracovního výběru, ostatní zůstanou; uživatel dostane krátkou zprávu s ID skupiny a rozdílem. Drag-and-drop mezi výběrem a skupinou používá stejné příkazy, stejný náhled a stejné validační podmínky jako tlačítka.
+Pro vytvoření nevyřízené skupiny není povinný komentář ani zvláštní schvalovací stav. Po úspěchu se spotřebované objekty odeberou z pracovního výběru, ostatní zůstanou; uživatel dostane krátkou zprávu s ID skupiny a rozdílem. Drag-and-drop a tlačítka Párovací plochy používají společný příkaz REARRANGE_GROUPS a stejné doménové validace. Náhled při přetažení ukazuje cíl, měnu a výsledný rozdíl; platné puštění provede jeden atomický vratný příkaz bez dalšího potvrzovacího dialogu. Platba na platbu vytvoří skupinu, platba na skupinu přidá člena, zóna Rozpárovat uvolní členy a zóna Nová skupina přijme alespoň dva objekty. Přesun ověřuje měnu, aktivitu, revize členů i rodičů, vlastní cíl a cykly. Ctrl+Z/Ctrl+Y obnovuje celou změnu včetně důkazů a suppression. Výběr přes více stránek se pro drag odmítne s vysvětlením; hromadné seskupení používá celý pracovní výběr, nikdy pouze načtených 500 řádků.
 
 ### 9.5 Undo/Redo
 
@@ -839,6 +842,8 @@ Dialog „Najít možné protějšky“ zobrazí volné kořeny stejné měny, j
 
 ### 11.6 Datové mřížky a fulltext
 
+V každém sloupci každé tabulky je viditelná šipka nabídky řazení a automatického filtru hodnot: hledání v hodnotách, zaškrtávací seznam, vybrat/odebrat nalezené, Použít, zrušit filtr sloupce a zrušit všechny filtry. Platí pro všech osm hlavních pohledů, protějšky, členy Párovací plochy a strom důkazu. Kliknutí na název cykluje vzestupně/sestupně/původní pořadí; Shift přidává klíč u tabulek, strom řadí sourozence jedním klíčem. Aktivní filtr je označen modře. Filtry různých sloupců se kombinují AND, hodnoty jednoho sloupce OR. Žádná zaškrtnutá hodnota znamená nula řádků; zrušený filtr znamená bez omezení. Prázdné hodnoty mají vlastní volbu a při řazení jsou na konci. Identifikátory včetně počátečních nul zůstávají textem, částky číslem. Nabídka zahrnuje celý výsledek před stránkováním a respektuje ostatní sloupce; vlastní filtr ji nezúží. Nepřítomná zvolená hodnota se nesmí tiše smazat. Stav filtrů je oddělen podle pohledu, explicitní Uložit filtr zachová i sloupcové podmínky a řazení. Strom při filtrování zachovává předky nalezených uzlů jako kontext. Filtr katalogu sestav se nepřenáší na jiná data exportu.
+
 Každá hlavní tabulka umožní přesun/sloučení nastavení sloupců, skrýt/zobrazit, změnu šířek, stabilní víceklíčové řazení (Shift+klik), Ctrl+klik/Shift výběr, kopírování hodnot a řádků, zachování scroll/focus při obnově. Částky se řadí numericky, data chronologicky, ID textově. Nastavení pohledu je perzistentní, dostupné i reset z Nastavení. Ctrl+A vybere všechny řádky aktuálního výsledku po filtru, ne pouze načtenou stránku; UI předá množinu ID, nikoli jen viditelné widgety.
 
 Filtry se kombinují AND mezi různými poli, OR uvnitř vícevýběru téhož pole. Pole: měna; zdroj obsahuje libovolný/všechny vybrané; stav; položka/skupina; strana; přesná signed částka nebo zbývající částka skupiny; rozsah částky; datum od/do (u skupiny průnik intervalu); důvod; FA/PPD/PVD; Booking reference; payout ID; SEQ; terminal; autorizace; ARN; VS; rezervace. Prázdný filtr neomezuje. Částkový filtr bez měny se aplikuje na číslo každého řádku, nikdy se nepřepočítává; uživatel vidí měnu výsledku.
@@ -859,7 +864,7 @@ Registr `ActionSpec(id,label,shortcut,allowed_types,predicate,disabled_reason,ha
 | Přidat/odebrat pracovní výběr | Nevyřízený kořen | Ctrl+Space |
 | Vyčistit pracovní výběr | Globálně; bez změny dat | Ctrl+Shift+Space |
 | Vytvořit skupinu / Spárovat | Platný homogenní výběr; spárovat jen nula | Ctrl+M otevře náhled, Ctrl+Enter potvrdí |
-| Přidat do skupiny | Otevřená kořenová skupina a volné kořeny | Z menu |
+| Přidat / přesunout / vyjmout členy | Aktivní finanční objekty a revize dle 9.4 | Přetažení nebo tlačítka Párovací plochy |
 | Rozpojit rodiče | Člen skupiny | Delete po náhledu |
 | Rozložit skupinu | Aktivní kořenová skupina | Shift+Delete po náhledu |
 | Upravit poznámku | Aktivní skupina | F2 |

@@ -13,7 +13,9 @@ def spin(predicate, seconds=8):
     deadline = time.monotonic() + seconds
     while not predicate() and time.monotonic() < deadline:
         QApplication.processEvents()
-        QTest.qWait(10)
+        # Let Python workers acquire the GIL between GUI event batches.
+        # QTest.qWait can starve them, especially on Windows.
+        time.sleep(0.01)
     assert predicate()
 
 

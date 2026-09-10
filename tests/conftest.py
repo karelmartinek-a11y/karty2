@@ -24,6 +24,6 @@ import json, re
 
 @pytest.fixture
 def wire():
-    s = (Path(__file__).parents[1] / "docs/SSOT.md").read_text()
+    s = (Path(__file__).parents[1] / "docs/SSOT.md").read_text(encoding="utf-8")
     part = s.split("### A.4 Mock BetterHotel")[1]
     return json.loads(re.search(r"```json\n(.*?)\n```", part, re.S)[1])

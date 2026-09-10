@@ -6,6 +6,7 @@ from PySide6.QtGui import QFont, QIcon, QPainter, QPixmap, QColor
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
+    QDockWidget,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -26,11 +27,10 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QSplitter,
     QMenu,
-    QTreeWidget,
-    QTreeWidgetItem,
 )
 from kajovokarty.domain.core import (
     AppError,
+    uid,
     canonical,
     checked,
     decimal_money,
@@ -118,6 +118,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.db = db
         self.work = WorkService(db)
+        from kajovokarty.application.pairing import PairingService
+
+        self.pairing = PairingService(db)
+        self.workspace_id = uid()
+        self.panel_revision = 0
         self.imports = ImportService(db)
         self.settings = SettingsService(db)
         self.sync = SyncService(db, self.settings)
@@ -138,6 +143,9 @@ class MainWindow(QMainWindow):
         self.query_revision = 0
         self.sort_order = [("date", "asc")]
         self.advanced = {}
+        self.column_states = {}
+        self.view_sorts = {}
+        self.facet_rows = []
         self.helper_inactive = False
         self.global_history = False
         self.helper_history = None
@@ -166,9 +174,8 @@ class MainWindow(QMainWindow):
         rootlayout.setContentsMargins(0, 0, 0, 0)
         self.setCentralWidget(root)
         self.registry = ActionRegistry(self)
-        QApplication.instance().focusChanged.connect(
-            lambda old, new: self.registry.refresh()
-        )
+        self.focus_callback = lambda old, new: self.registry.refresh()
+        QApplication.instance().focusChanged.connect(self.focus_callback)
         bar = QToolBar()
         bar.setMovable(False)
         self.addToolBar(bar)
@@ -178,7 +185,7 @@ class MainWindow(QMainWindow):
         specs = [
             ("import", "Importovat", "Ctrl+I", self.choose_import),
             ("sync", "Načíst BetterHotel", "", self.start_sync),
-            ("auto", "Spustit automatické párování", "", self.start_auto),
+            ("auto", "Automaticky spárovat vše", "", self.start_auto),
             ("detail", "Otevřít detail", "Return", self.open_detail),
             (
                 "select",
@@ -293,29 +300,33 @@ class MainWindow(QMainWindow):
         self.contextbar = QHBoxLayout()
         self.contentlayout.addLayout(self.contextbar)
         self.model = TableModel(columns=WORK_COLUMNS)
+        self.model.remote = True
         self.table = WorkTable()
+        self.table.workspace = self.workspace_id
+        self.table.drag_guard = self.can_start_drag
+        self.table.dropHint.connect(lambda text: self.status.setText(text))
         self.table.allRequested.connect(self.highlight_all)
         self.table.copyRequested.connect(self.copy_rows)
         self.table.groupDropped.connect(
             lambda payload, row: self.registry.invoke("drop_group", payload, row)
         )
         self.table.setModel(self.model)
+        cc = self.table.column_controller
+        cc.get_filters = lambda: self.column_states.setdefault(self.scope, {})
+        cc.set_filter = self.set_column_filter
+        cc.set_sort = self.set_column_sort
+        cc.get_options = self.column_options
         self.table.selectionModel().selectionChanged.connect(self.selection_changed)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
         self.table.setAccessibleName("Pracovní tabulka")
         self.table.horizontalHeader().setSectionsMovable(True)
-        self.table.horizontalHeader().sectionClicked.connect(self.sort_clicked)
         self.table.verticalHeader().setDefaultSectionSize(34)
         self.table.doubleClicked.connect(self.open_detail)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.context_menu)
         self.contentlayout.addWidget(self.table, 1)
-        self.table.horizontalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
-        self.table.horizontalHeader().customContextMenuRequested.connect(
-            self.column_menu
-        )
         self.page = 0
         self.total = 0
         pager = QHBoxLayout()
@@ -338,6 +349,30 @@ class MainWindow(QMainWindow):
         self.cancel_button = button("Zrušit operaci", self.cancel_operation)
         self.cancel_button.setEnabled(False)
         self.statusBar().addPermanentWidget(self.cancel_button)
+        from kajovokarty.ui.pairing_panel import PairingPanel
+
+        self.pair_panel = PairingPanel(self.workspace_id)
+        self.pair_dock = QDockWidget("Párovací plocha", self)
+        self.pair_dock.setObjectName("pairingDock")
+        self.pair_dock.setWidget(self.pair_panel)
+        self.pair_dock.setMinimumWidth(410)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.pair_dock)
+        self.pair_dock.hide()
+        bar.addAction(self.pair_dock.toggleViewAction())
+        self.pair_panel.requested.connect(self.open_pairing)
+        self.pair_panel.dropped.connect(
+            lambda payload, target: self.registry.invoke("drop_group", payload, target)
+        )
+        self.pair_panel.newGroup.connect(self.drop_new_group)
+        self.pair_panel.detachRequested.connect(self.detach_panel_members)
+        self.pair_panel.dissolveRequested.connect(self.unpair_panel)
+        self.pair_panel.allowAutoRequested.connect(self.allow_panel_auto)
+        self.pair_panel.table.drag_guard = lambda: not self.busy
+        self.pair_panel.table.dropHint.connect(self.status.setText)
+        self.panel_timer = QTimer(self)
+        self.panel_timer.setSingleShot(True)
+        self.panel_timer.setInterval(130)
+        self.panel_timer.timeout.connect(self.open_selected_pairing)
         self.nav.currentRowChanged.connect(self.navigate)
         self.apply_appearance()
         self.nav.setCurrentRow(0)
@@ -391,7 +426,11 @@ class MainWindow(QMainWindow):
 
     def navigate(self, index):
         self.result_selection = None
+        self.view_sorts[self.scope] = list(self.sort_order)
         self.scope = index
+        self.sort_order = self.view_sorts.get(
+            index, [("date", "asc")] if index in (0, 1, 4) else []
+        )
         self.page = 0
         self.title.setText(NAV[index])
         while self.contextbar.count():
@@ -452,6 +491,9 @@ class MainWindow(QMainWindow):
         f = {
             **self.advanced,
             "text": self.search.text(),
+            "column_filters": {
+                k: list(v) for k, v in self.column_states.get(self.scope, {}).items()
+            },
             "status": "resolved"
             if self.scope == 1
             else "all"
@@ -484,14 +526,20 @@ class MainWindow(QMainWindow):
             selection = self.work.selection()
             if scope in (0, 1, 4):
                 result = self.work.query(
-                    f,
+                    {**f, "column_filters": {}}
+                    if scope == 4 and self.global_history
+                    else f,
                     sort=sort_order,
                     page=page,
                     page_size=0 if scope == 4 and self.global_history else 500,
                 )
                 if scope == 4 and self.global_history:
                     extra = self.catalog.global_matches(f.get("text", ""))
-                    combined = result["rows"] + extra
+                    from kajovokarty.domain.columns import filter_rows
+
+                    combined = filter_rows(
+                        result["rows"] + extra, f.get("column_filters"), sort_order
+                    )
                     result["ids"] = [r["id"] for r in combined]
                     result["total"] = len(combined)
                     result["rows"] = combined[page * 500 : (page + 1) * 500]
@@ -521,7 +569,9 @@ class MainWindow(QMainWindow):
                 rows = self.catalog.rows("operations")
             return (
                 "other",
-                rows,
+                self.filter_catalog_rows(
+                    rows, f.get("column_filters"), sort_order, page
+                ),
                 selection,
                 self.catalog.view("columns:" + str(scope)),
             )
@@ -531,22 +581,26 @@ class MainWindow(QMainWindow):
                 return
             kind, value, self.selection, state = result
             selected = set(self.selected_ids())
-            self.rows = value["rows"] if kind == "work" else value
+            self.rows = value["rows"]
+            self.facet_rows = value.get("base_rows", [])
+            self.page = value.get("page", page)
             scroll = self.table.verticalScrollBar().value()
             cols = (
                 WORK_COLUMNS
                 if kind == "work"
-                else [(k, k) for k in self.rows[0]]
-                if self.rows
+                else [(k, k) for k in self.facet_rows[0]]
+                if self.facet_rows
+                else self.model.columns
+                if self.column_states.get(scope)
                 else [("info", "Žádné záznamy")]
             )
             self.restoring_selection = True
             self.model.replace(self.rows, cols)
-            self.total = value["total"] if kind == "work" else len(self.rows)
+            self.total = value["total"]
             self.empty_hint.setVisible(
                 scope == 0 and self.total == 0 and not self.search.text()
             )
-            self.all_ids = value["ids"] if kind == "work" else []
+            self.all_ids = value["ids"]
             self.page_label.setText(
                 f"{self.page * 500 + 1 if self.total else 0}–{min((self.page + 1) * 500, self.total)} / {self.total}"
             )
@@ -579,43 +633,97 @@ class MainWindow(QMainWindow):
                         self.model.index(i, 0),
                         QItemSelectionModel.Select | QItemSelectionModel.Rows,
                     )
-            self.table.horizontalHeader().blockSignals(True)
-            if state:
-                self.table.horizontalHeader().restoreState(
-                    QByteArray.fromBase64(state.encode())
-                )
-            else:
-                for i in range(len(cols)):
-                    self.table.setColumnWidth(
-                        i,
-                        (
-                            [86, 65, 105, 95, 120, 160, 70, 100, 55, 100, 165, 160][i]
-                            if kind == "work"
-                            else 145
-                        ),
+            layout_key = (scope, tuple(key for key, _ in cols))
+            if getattr(self, "displayed_layout", None) != layout_key:
+                self.table.horizontalHeader().blockSignals(True)
+                if state:
+                    self.table.horizontalHeader().restoreState(
+                        QByteArray.fromBase64(state.encode())
                     )
-            self.table.horizontalHeader().blockSignals(False)
+                else:
+                    for i in range(len(cols)):
+                        self.table.setColumnWidth(
+                            i,
+                            (
+                                [
+                                    100,
+                                    85,
+                                    125,
+                                    110,
+                                    140,
+                                    180,
+                                    100,
+                                    115,
+                                    85,
+                                    115,
+                                    185,
+                                    180,
+                                ][i]
+                                if kind == "work"
+                                else 165
+                            ),
+                        )
+                self.table.horizontalHeader().blockSignals(False)
+                self.displayed_layout = layout_key
             self.restoring_selection = False
+            self.table.column_controller.refresh(sort_order)
             self.registry.refresh()
 
         self.run(query, done, False)
 
-    def sort_clicked(self, column):
-        if self.scope not in (0, 1, 4):
-            return
-        field = self.model.columns[column][0]
-        previous = next((d for f, d in self.sort_order if f == field), "desc")
-        direction = "desc" if previous == "asc" else "asc"
-        self.sort_order = (
-            [(f, d) for f, d in self.sort_order if f != field]
-            if QApplication.keyboardModifiers() & Qt.ShiftModifier
-            else []
-        ) + [(field, direction)]
-        self.table.horizontalHeader().setSortIndicator(
-            column, Qt.AscendingOrder if direction == "asc" else Qt.DescendingOrder
-        )
+    @staticmethod
+    def filter_catalog_rows(rows, filters, sort, page):
+        from kajovokarty.domain.columns import filter_rows
+
+        filtered = filter_rows(rows, filters, sort)
+        page = min(page, max(0, (len(filtered) - 1) // 500))
+        return {
+            "rows": filtered[page * 500 : (page + 1) * 500],
+            "total": len(filtered),
+            "page": page,
+            "ids": [r["id"] for r in filtered if "id" in r],
+            "base_rows": rows,
+        }
+
+    def set_column_filter(self, field, selected):
+        state = self.column_states.setdefault(self.scope, {})
+        if field is None:
+            state.clear()
+        elif selected is None:
+            state.pop(field, None)
+        else:
+            state[field] = list(selected)
+        self.result_selection = None
         self.page = 0
         self.refresh()
+
+    def set_column_sort(self, sort):
+        self.sort_order = list(sort)
+        self.page = 0
+        self.refresh()
+
+    def column_options(self, field, done):
+        from kajovokarty.domain.columns import filter_options
+
+        scope = self.scope
+        f = self.filters()
+        history = self.global_history
+        rows = list(self.facet_rows)
+
+        def query(progress):
+            if scope in (0, 1, 4):
+                if scope == 4 and history:
+                    all_rows = self.work.query(
+                        {**f, "column_filters": {}}, page_size=0
+                    )["rows"]
+                    all_rows += self.catalog.global_matches(f.get("text", ""))
+                    return filter_options(all_rows, field, f.get("column_filters"))
+                return self.work.query({**f, "_facet": field})["facets"]
+            return filter_options(rows, field, f.get("column_filters"))
+
+        self.run(
+            query, lambda options: done(options) if self.scope == scope else None, False
+        )
 
     def advanced_filters(self):
         d = QDialog(self)
@@ -767,12 +875,21 @@ class MainWindow(QMainWindow):
                 and rows[0].get("lifecycle") == "ACTIVE"
             )
         if id == "group":
-            return len(self.selection) >= 2
+            return len(self.selection) >= 2 or (
+                len(rows) >= 2
+                and all(
+                    r.get("type") in ("SOURCE", "GROUP") and not r.get("resolved")
+                    for r in rows
+                )
+            )
         return True
 
     def selection_changed(self, *args):
-        if not self.restoring_selection:
-            self.result_selection = None
+        if self.restoring_selection:
+            return
+        self.result_selection = None
+        if hasattr(self, "panel_timer"):
+            self.panel_timer.start()
         self.registry.refresh()
 
     def highlight_all(self):
@@ -817,25 +934,124 @@ class MainWindow(QMainWindow):
             )
         QApplication.clipboard().setText(text)
 
-    def drop_group(self, revisions, group):
+    def can_start_drag(self):
         if self.busy:
-            return
-        ids = [i for i in revisions if i != group["id"]]
-        if not ids:
-            return
-        revisions = {**revisions, group["id"]: group["revision"]}
-        if (
-            QMessageBox.question(
-                self,
-                "Přidat do skupiny",
-                f"Přidat {len(ids)} kořenů do {group['primary_identifier']}?",
-            )
-            == QMessageBox.Yes
+            return False
+        if self.result_selection is not None and len(self.result_selection) > len(
+            self.model.rows
         ):
+            self.status.setText(
+                "Výběr přesahuje stránku. Pro hromadné vytvoření skupiny použijte pracovní výběr; přetažení není částečně provedeno."
+            )
+            return False
+        return True
+
+    def open_selected_pairing(self):
+        rows = self.selected_rows()
+        if (
+            len(rows) == 1
+            and rows[0].get("type") in ("SOURCE", "GROUP")
+            and rows[0].get("lifecycle") == "ACTIVE"
+        ):
+            self.open_pairing(rows[0]["id"])
+
+    def open_pairing(self, identity):
+        self.panel_revision += 1
+        revision = self.panel_revision
+
+        def show(data):
+            if revision != self.panel_revision:
+                return
+            self.pair_panel.show_data(data)
+            opening = not self.pair_dock.isVisible()
+            self.pair_dock.show()
+            if opening:
+                self.resizeDocks([self.pair_dock], [650], Qt.Horizontal)
+
+        self.run(
+            lambda p: self.pairing.panel(identity),
+            show,
+            False,
+            error_handler=lambda e: self.pair_panel.reset()
+            if revision == self.panel_revision
+            else None,
+        )
+
+    def drop_group(self, payload, target):
+        if self.busy or payload.get("workspace") != self.workspace_id:
+            return
+        rows = payload["rows"]
+        if target and (
+            target.get("type") not in ("SOURCE", "GROUP")
+            or target.get("lifecycle") != "ACTIVE"
+        ):
+            self.show_error(
+                AppError(
+                    "SELECTION_INVALID", "Párovat lze pouze aktuální finanční objekty."
+                )
+            )
+            return
+        ids = [r["id"] for r in rows]
+        revisions = {r["id"]: r["revision"] for r in rows}
+        parents = {
+            r["id"]: [r["parent_id"], r["parent_revision"]]
+            for r in rows
+            if r.get("parent_id")
+        }
+        if target and target.get("parent_id"):
+            parents[target["id"]] = [target["parent_id"], target["parent_revision"]]
+        self.run(
+            lambda p: self.pairing.move(
+                ids,
+                revisions,
+                target=target["id"] if target else None,
+                target_revision=target["revision"] if target else None,
+                parent_revisions=parents,
+            ),
+            self.pairing_done,
+        )
+
+    def pairing_done(self, result):
+        self.after_mutation(result)
+        self.status.setText(f"Přesunuto {result['moved']} objektů. Zpět: Ctrl+Z.")
+        if result.get("id"):
+            self.open_pairing(result["id"])
+        elif self.pair_panel.current:
+            self.open_pairing(self.pair_panel.current["id"])
+
+    def drop_new_group(self, payload):
+        if len(payload.get("rows", [])) < 2:
+            self.show_error(
+                AppError(
+                    "GROUP_INVALID",
+                    "Pro novou skupinu přetáhněte alespoň dvě položky nebo položku na protějšek.",
+                )
+            )
+            return
+        first, *rest = payload["rows"]
+        self.drop_group({**payload, "rows": rest}, {**first, "lifecycle": "ACTIVE"})
+
+    def detach_panel_members(self):
+        table = self.pair_panel.table
+        rows = [
+            self.pair_panel.model.rows[i.row()]
+            for i in table.selectionModel().selectedRows()
+        ]
+        if rows:
+            self.drop_group({"workspace": self.workspace_id, "rows": rows}, None)
+
+    def allow_panel_auto(self):
+        if self.pair_panel.current:
+            identity = self.pair_panel.current["id"]
             self.run(
-                lambda p: self.work.add_to_group(group["id"], ids, revisions),
+                lambda p: self.pairing.allow_previous_auto(identity),
                 self.after_mutation,
             )
+
+    def unpair_panel(self):
+        r = self.pair_panel.current
+        if r and r["type"] == "GROUP" and not r.get("parent_id"):
+            self.drop_group({"workspace": self.workspace_id, "rows": [r]}, None)
 
     def select_all(self):
         if self.scope not in (0, 4):
@@ -846,6 +1062,8 @@ class MainWindow(QMainWindow):
     def after_mutation(self, result=None):
         self.status.setText("Operace dokončena.")
         self.refresh()
+        if hasattr(self, "pair_panel") and self.pair_panel.current:
+            self.open_pairing(self.pair_panel.current["id"])
 
     def add_selection(self):
         ids = self.selected_ids()
@@ -856,10 +1074,14 @@ class MainWindow(QMainWindow):
         self.run(lambda p: self.work.select([], clear=True), self.after_mutation)
 
     def group_dialog(self):
+        highlighted = set(self.selected_ids())
+
         def preview(progress):
-            return self.work.selection(), self.work.query(
-                {"status": "unresolved"}, page_size=0
-            )["rows"]
+            rows = self.work.query({"status": "unresolved"}, page_size=0)["rows"]
+            return (
+                self.work.selection()
+                or {r["id"]: r["revision"] for r in rows if r["id"] in highlighted}
+            ), rows
 
         def show(result):
             selection, rows = result
@@ -925,9 +1147,7 @@ class MainWindow(QMainWindow):
     def add_group_dialog(self):
         rows = self.selected_rows()
         if len(rows) != 1 or rows[0].get("type") != "GROUP":
-            self.show_error(
-                AppError("GROUP_INVALID", "Označte jednu otevřenou cílovou skupinu.")
-            )
+            self.show_error(AppError("GROUP_INVALID", "Označte jednu cílovou skupinu."))
             return
         group = rows[0]
 
@@ -942,18 +1162,13 @@ class MainWindow(QMainWindow):
                 )
                 return
             revisions = {**selection, group["id"]: group["revision"]}
-            if (
-                QMessageBox.question(
-                    self,
-                    "Přidat do skupiny",
-                    f"Přidat {len(ids)} dalších přímých dětí do skupiny {group['primary_identifier']}?",
-                )
-                == QMessageBox.Yes
-            ):
-                self.run(
-                    lambda p: self.work.add_to_group(group["id"], ids, revisions),
-                    self.after_mutation,
-                )
+            self.drop_group(
+                {
+                    "workspace": self.workspace_id,
+                    "rows": [{"id": i, "revision": revisions[i]} for i in ids],
+                },
+                group,
+            )
 
         self.run(preview, show, False)
 
@@ -1194,23 +1409,34 @@ class MainWindow(QMainWindow):
         self.run(lambda p: self.sync.scope(), confirm, False)
 
     def start_auto(self):
-        if (
-            QMessageBox.question(
-                self,
-                "Automatické párování",
-                "Spustit nad celou databází bez ohledu na filtr?",
+        if self.busy:
+            return
+
+        def completed(result):
+            from kajovokarty.ui.auto_result import show_result
+
+            self.after_mutation(result)
+            show_result(self, result)
+            self.status.setText(
+                f"Automatika: {result['newly_resolved_leaves']} nově vyřízených položek v {result['created_groups']} skupinách; {result['rounds']} kol. Výsledek je uložen v detailu operace."
             )
-            == QMessageBox.Yes
-        ):
-            self.run(
-                lambda p: self.matching.run(self.cancel, p),
-                lambda r: (
-                    self.status.setText(
-                        f"Vytvořeno {r['created_groups']} skupin, kol {r['rounds']}."
-                    ),
-                    self.refresh(),
-                ),
-            )
+
+        def interrupted(error):
+            from kajovokarty.ui.auto_result import show_result
+
+            self.after_mutation()
+            result = error.details.get("auto_result")
+            if result:
+                show_result(self, result, error)
+                self.status.setText(error.message)
+            else:
+                self.show_error(error)
+
+        self.run(
+            lambda p: self.matching.run(self.cancel, p),
+            completed,
+            error_handler=interrupted,
+        )
 
     def open_detail(self, *args):
         rows = self.selected_rows()
@@ -1227,6 +1453,31 @@ class MainWindow(QMainWindow):
                 ),
                 False,
             )
+        elif self.scope == 7 and r.get("type") == "AUTO_MATCH":
+
+            def load(progress):
+                with self.db.connect() as c:
+                    return dict(
+                        c.execute(
+                            "SELECT * FROM operation WHERE id=?", (r["id"],)
+                        ).fetchone()
+                    )
+
+            def show(operation):
+                from kajovokarty.ui.auto_result import show_result
+
+                result = json.loads(operation["recovery_json"])
+                error = json.loads(operation["safe_error_json"] or "{}")
+                if result.get("operation_id"):
+                    show_result(
+                        self,
+                        result,
+                        AppError(error["code"], error["message"]) if error else None,
+                    )
+                else:
+                    text_dialog(self, "Detail běhu automatiky", canonical(operation))
+
+            self.run(load, show, False)
         elif self.scope == 3:
             self.helper_dialog(r)
         else:
@@ -1359,7 +1610,9 @@ class MainWindow(QMainWindow):
                 f"Rozdíl {display_money(e['difference'])} {e['object']['currency']} · listů {len(e['leaves'])}"
             )
         )
-        tree = QTreeWidget()
+        from kajovokarty.ui.evidence_tree import EvidenceTree, EvidenceItem, RAW_ROLE
+
+        tree = EvidenceTree()
         tree.setHeaderLabels(["Jedinečný list", "Zdroj", "Původní částka", "Měna"])
         tree.setAccessibleName("Listy finančního důkazu")
         sources = {source["id"]: source for source in e["leaves"]}
@@ -1371,7 +1624,7 @@ class MainWindow(QMainWindow):
         while pending:
             identity, parent = pending.pop()
             source = sources.get(identity)
-            item = QTreeWidgetItem(
+            item = EvidenceItem(
                 [
                     source["primary_identifier"],
                     source["kind"],
@@ -1387,6 +1640,15 @@ class MainWindow(QMainWindow):
                 ]
             )
             item.setData(0, Qt.UserRole, identity)
+            for col, raw in enumerate(
+                [
+                    source["primary_identifier"] if source else "G" + identity[:10],
+                    source["kind"] if source else "GROUP",
+                    source["signed_amount_minor"] if source else None,
+                    e["object"]["currency"],
+                ]
+            ):
+                item.setData(col, RAW_ROLE, raw)
             if parent:
                 parent.addChild(item)
             else:
@@ -1397,6 +1659,7 @@ class MainWindow(QMainWindow):
             pending.extend(
                 (child, item) for child in reversed(children.get(identity, []))
             )
+        tree.enable_filters()
         tree.expandToDepth(2)
         tree.itemDoubleClicked.connect(
             lambda item, column: self.run(
@@ -1484,18 +1747,7 @@ class MainWindow(QMainWindow):
         if not rows or rows[0].get("type") != "GROUP":
             return
         r = rows[0]
-        if (
-            QMessageBox.question(
-                self,
-                "Rozložit skupinu",
-                "Uvolnit všechny přímé děti? Vnořené podskupiny zůstanou zachovány.",
-            )
-            == QMessageBox.Yes
-        ):
-            self.run(
-                lambda p: self.work.dissolve(r["id"], r["revision"]),
-                self.after_mutation,
-            )
+        self.drop_group({"workspace": self.workspace_id, "rows": [r]}, None)
 
     def edit_note(self):
         rows = self.selected_rows()
@@ -1533,6 +1785,11 @@ class MainWindow(QMainWindow):
                 )
             )
             table = WorkTable()
+            table.workspace = self.workspace_id
+            table.groupDropped.connect(
+                lambda payload, target: (d.accept(), self.drop_group(payload, target))
+            )
+            table.dropHint.connect(self.status.setText)
             model = TableModel(
                 rows, WORK_COLUMNS + [("pair_difference", "Rozdíl po spojení")]
             )
@@ -1543,7 +1800,8 @@ class MainWindow(QMainWindow):
 
             def add():
                 ids = [anchor["id"]] + [
-                    rows[i.row()]["id"] for i in table.selectionModel().selectedRows()
+                    model.rows[i.row()]["id"]
+                    for i in table.selectionModel().selectedRows()
                 ]
                 if len(ids) > 1:
                     d.accept()
@@ -1653,7 +1911,7 @@ class MainWindow(QMainWindow):
         text_dialog(
             self,
             "Nápověda",
-            "1. Importovat → zvolit zdroj a úplné exporty → zkontrolovat náhled → Importovat.\n2. Načíst BetterHotel pouze po zadání tokenů v Nastavení.\n3. Spustit automatické párování výslovným tlačítkem.\n4. Ručně: označit kořeny → Přidat označené → Vytvořit skupinu. CZK a EUR nelze spojit. Rozdíl musí být přesně nula pro Vyřízeno.\n5. Rozložení zachová podskupiny. Ctrl+Z / Ctrl+Y vrací platné příkazy. Import se nevrací.\n6. Sestavy: CSV jako ZIP, XLSX s textovými identifikátory, PDF.\n7. Zálohy neobsahují tokeny. Obnova vytvoří nové připojení, pomocná data je třeba úplně načíst.\n\nKlávesy: Ctrl+I import, Ctrl+F hledání, Ctrl+Space výběr, Ctrl+M skupina, Enter detail, F2 poznámka, F5 místní obnova.\n\nVývojová verze 0.2.0 — rozsah ověření a zbývající omezení jsou v docs/VALIDATION.md repozitáře.",
+            "1. Importovat → zvolit zdroj a úplné exporty → zkontrolovat náhled → Importovat.\n2. Načíst BetterHotel pouze po zadání tokenů v Nastavení.\n3. Spustit automatické párování výslovným tlačítkem.\n4. Ručně: přetáhnout platbu na protějšek nebo skupinu. Členy upravíte v Párovací ploše; vytažením do zóny Rozpárovat je uvolníte. CZK a EUR nelze spojit. Rozdíl musí být přesně nula pro Vyřízeno.\n5. Rozložení zachová podskupiny. Ctrl+Z / Ctrl+Y vrací platné příkazy. Import se nevrací.\n6. Každý sloupec: šipka v záhlaví otevře filtr hodnot; kliknutí na název přepíná řazení. Sestavy: CSV jako ZIP, XLSX, PDF.\n7. Zálohy neobsahují tokeny. Obnova vytvoří nové připojení, pomocná data je třeba úplně načíst.\n\nKlávesy: Ctrl+I import, Ctrl+F hledání, Ctrl+Space výběr, Ctrl+M skupina, Enter detail, F2 poznámka, F5 místní obnova.\n\nVývojová verze 0.3.1 — rozsah ověření a zbývající omezení jsou v docs/VALIDATION.md repozitáře.",
         )
 
     def save_filter(self):
@@ -1664,10 +1922,9 @@ class MainWindow(QMainWindow):
             except AppError as e:
                 self.show_error(e)
                 return
+            scope, sort = str(self.scope), list(self.sort_order)
             self.run(
-                lambda p: self.catalog.save_filter(
-                    name, NAV[self.scope], f, self.sort_order
-                ),
+                lambda p: self.catalog.save_filter(name, scope, f, sort),
                 self.after_mutation,
             )
 
@@ -1712,8 +1969,14 @@ class MainWindow(QMainWindow):
                             self.after_mutation,
                         )
                     return
-                self.nav.setCurrentRow(int(saved["scope"]))
+                scope = (
+                    NAV.index(saved["scope"])
+                    if saved["scope"] in NAV
+                    else int(saved["scope"])
+                )
+                self.nav.setCurrentRow(scope)
                 f = json.loads(saved["filter_json"])
+                self.column_states[self.scope] = f.pop("column_filters", {})
                 self.sort_order = json.loads(saved["sort_json"]) or [("date", "asc")]
                 self.advanced = {
                     k: v
@@ -1787,4 +2050,10 @@ class MainWindow(QMainWindow):
             self.status.setText("Dokončete nebo zrušte běžící operaci před zavřením.")
             event.ignore()
         else:
+            self.search_timer.stop()
+            self.panel_timer.stop()
+            self.view_timer.stop()
+            if self.focus_callback is not None:
+                QApplication.instance().focusChanged.disconnect(self.focus_callback)
+                self.focus_callback = None
             event.accept()

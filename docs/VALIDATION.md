@@ -1,3 +1,5 @@
+> Historický protokol verze 0.2.0. Aktuální změny a nové ověření 0.3.0: [UI_WORKFLOW.md](UI_WORKFLOW.md).
+
 # Ověřovací protokol — KájovoKarty 0.2.0
 
 ## Stav

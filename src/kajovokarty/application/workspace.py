@@ -66,7 +66,12 @@ class WorkspaceService:
         try:
             with self.db.gate, tempfile.TemporaryDirectory(dir=target) as folder:
                 candidate = Path(folder) / "kajovokarty.sqlite"
-                with self.db.connect() as source, sqlite3.connect(candidate) as dest:
+                from contextlib import closing
+
+                with (
+                    self.db.connect() as source,
+                    closing(sqlite3.connect(candidate)) as dest,
+                ):
                     source.backup(dest)
                     dest.execute("PRAGMA journal_mode=DELETE")
                     require(

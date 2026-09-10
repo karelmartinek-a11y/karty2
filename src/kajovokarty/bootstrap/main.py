@@ -29,7 +29,9 @@ def run_workspace(app, base):
     data = base / "data"
     try:
         if pointer.exists():
-            data = Path(json.loads(pointer.read_text())["data_directory"])
+            data = Path(
+                json.loads(pointer.read_text(encoding="utf-8"))["data_directory"]
+            )
             require(
                 data.is_dir() and (data / "kajovokarty.sqlite").is_file(),
                 "DIRECTORY_UNAVAILABLE",

@@ -3,6 +3,7 @@
 import json
 from kajovokarty.domain.core import require, search_tokens
 from kajovokarty.domain.helpers import extract_references, reference_decision
+from kajovokarty.domain.columns import matches
 
 
 def build_helpers(c, st, ids, filters):
@@ -67,8 +68,10 @@ def build_helpers(c, st, ids, filters):
                 ):
                     seeds.add(key)
             elif (
-                not filters.get("resource_type") or key[0] in filters["resource_type"]
-            ) and all(t in e["local_search_text"] for t in tokens):
+                (not filters.get("resource_type") or key[0] in filters["resource_type"])
+                and all(t in e["local_search_text"] for t in tokens)
+                and matches(e, filters.get("column_filters", {}))
+            ):
                 seeds.add(key)
         selected = set()
         pending = list(seeds)

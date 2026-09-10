@@ -34,7 +34,7 @@ class BackupService:
             raw = dbpath.read_bytes()
             manifest = {
                 "schema": 2,
-                "app_build": "0.2.0",
+                "app_build": "0.3.1",
                 "created_at": now(),
                 "files": {"database.sqlite": bytehash(raw)},
                 "secrets_included": False,
@@ -171,7 +171,7 @@ class BackupService:
             self.db.validate(c)
             info = {
                 "domain_invariants": "PASS",
-                "app_build": "0.2.0",
+                "app_build": "0.3.1",
                 "os": platform.system(),
                 "python": platform.python_version(),
                 "integrity": c.execute("PRAGMA quick_check").fetchone()[0],

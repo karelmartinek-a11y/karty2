@@ -326,9 +326,9 @@ def test_move_verified_and_original_kept(importer, fixtures, tmp_path):
     target = tmp_path / "new-workspace"
     pointer = tmp_path / "pointer.json"
     WorkspaceService(importer.db, pointer).move(target)
-    assert importer.db.path.is_file() and json.loads(pointer.read_text())[
-        "data_directory"
-    ] == str(target)
+    assert importer.db.path.is_file() and json.loads(
+        pointer.read_text(encoding="utf-8")
+    )["data_directory"] == str(target)
     moved = Database(target / "kajovokarty.sqlite")
     assert len(WorkService(moved).query()["ids"]) == 21
     with pytest.raises(AppError):
@@ -360,7 +360,9 @@ def test_v1_migration_creates_verified_backup(tmp_path, fixtures):
     path = tmp_path / "old.sqlite"
     c = sqlite3.connect(path)
     c.executescript(
-        (Path(__file__).parents[1] / "src/kajovokarty/migrations/001.sql").read_text()
+        (Path(__file__).parents[1] / "src/kajovokarty/migrations/001.sql").read_text(
+            encoding="utf-8"
+        )
     )
     ctx = uid()
     c.execute("INSERT INTO helper_context VALUES(?,'CURRENT',0,?,NULL)", (ctx, now()))
