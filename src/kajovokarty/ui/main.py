@@ -384,7 +384,9 @@ class MainWindow(QMainWindow):
         self.table.horizontalHeader().sectionMoved.connect(self.persist_columns)
         self.refresh()
 
-    def run(self, fn, done=None, mutating=True, error_handler=None):
+    def run(
+        self, fn, done=None, mutating=True, error_handler=None, progress_handler=None
+    ):
         if mutating and self.busy:
             return
         if mutating:
@@ -394,7 +396,9 @@ class MainWindow(QMainWindow):
             self.cancel_button.setEnabled(True)
         job = Job(fn)
         self.jobs.add(job)
-        job.signals.progress.connect(self.status.setText)
+        job.signals.progress.connect(
+            progress_handler or (lambda event: self.status.setText(str(event)))
+        )
         job.signals.error.connect(error_handler or self.show_error)
         if done:
             job.signals.result.connect(done)
@@ -1411,8 +1415,14 @@ class MainWindow(QMainWindow):
     def start_auto(self):
         if self.busy:
             return
+        from kajovokarty.ui.auto_progress import AutoProgressDialog
+
+        dialog = AutoProgressDialog(self, self.cancel_operation)
+        self.auto_progress = dialog
+        dialog.show()
 
         def completed(result):
+            dialog.finish()
             from kajovokarty.ui.auto_result import show_result
 
             self.after_mutation(result)
@@ -1422,6 +1432,7 @@ class MainWindow(QMainWindow):
             )
 
         def interrupted(error):
+            dialog.finish()
             from kajovokarty.ui.auto_result import show_result
 
             self.after_mutation()
@@ -1436,6 +1447,7 @@ class MainWindow(QMainWindow):
             lambda p: self.matching.run(self.cancel, p),
             completed,
             error_handler=interrupted,
+            progress_handler=dialog.update_progress,
         )
 
     def open_detail(self, *args):
@@ -1911,7 +1923,7 @@ class MainWindow(QMainWindow):
         text_dialog(
             self,
             "Nápověda",
-            "1. Importovat → zvolit zdroj a úplné exporty → zkontrolovat náhled → Importovat.\n2. Načíst BetterHotel pouze po zadání tokenů v Nastavení.\n3. Spustit automatické párování výslovným tlačítkem.\n4. Ručně: přetáhnout platbu na protějšek nebo skupinu. Členy upravíte v Párovací ploše; vytažením do zóny Rozpárovat je uvolníte. CZK a EUR nelze spojit. Rozdíl musí být přesně nula pro Vyřízeno.\n5. Rozložení zachová podskupiny. Ctrl+Z / Ctrl+Y vrací platné příkazy. Import se nevrací.\n6. Každý sloupec: šipka v záhlaví otevře filtr hodnot; kliknutí na název přepíná řazení. Sestavy: CSV jako ZIP, XLSX, PDF.\n7. Zálohy neobsahují tokeny. Obnova vytvoří nové připojení, pomocná data je třeba úplně načíst.\n\nKlávesy: Ctrl+I import, Ctrl+F hledání, Ctrl+Space výběr, Ctrl+M skupina, Enter detail, F2 poznámka, F5 místní obnova.\n\nVývojová verze 0.3.1 — rozsah ověření a zbývající omezení jsou v docs/VALIDATION.md repozitáře.",
+            "1. Importovat → zvolit zdroj a úplné exporty → zkontrolovat náhled → Importovat.\n2. Načíst BetterHotel pouze po zadání tokenů v Nastavení.\n3. Spustit automatické párování výslovným tlačítkem.\n4. Ručně: přetáhnout platbu na protějšek nebo skupinu. Členy upravíte v Párovací ploše; vytažením do zóny Rozpárovat je uvolníte. CZK a EUR nelze spojit. Rozdíl musí být přesně nula pro Vyřízeno.\n5. Rozložení zachová podskupiny. Ctrl+Z / Ctrl+Y vrací platné příkazy. Import se nevrací.\n6. Každý sloupec: šipka v záhlaví otevře filtr hodnot; kliknutí na název přepíná řazení. Sestavy: CSV jako ZIP, XLSX, PDF.\n7. Zálohy neobsahují tokeny. Obnova vytvoří nové připojení, pomocná data je třeba úplně načíst.\n\nKlávesy: Ctrl+I import, Ctrl+F hledání, Ctrl+Space výběr, Ctrl+M skupina, Enter detail, F2 poznámka, F5 místní obnova.\n\nVývojová verze 0.3.2 — rozsah ověření a zbývající omezení jsou v docs/VALIDATION.md repozitáře.",
         )
 
     def save_filter(self):

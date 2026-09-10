@@ -5,7 +5,7 @@ from kajovokarty.domain.core import AppError
 class Signals(QObject):
     result = Signal(object)
     error = Signal(object)
-    progress = Signal(str)
+    progress = Signal(object)
     finished = Signal()
 
 

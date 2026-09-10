@@ -12,7 +12,9 @@ def isolated(candidates):
     ]
 
 
-def zero_combinations(items, max_size=6, max_items=40, max_states=100000, pulse=None):
+def zero_combinations(
+    items, max_size=6, max_items=40, max_states=100000, pulse=None, search_progress=None
+):
     if len(items) > max_items:
         return [], True, 0
     ordered = sorted(items, key=lambda r: (r["kind"], r["source_identity"]))
@@ -21,9 +23,14 @@ def zero_combinations(items, max_size=6, max_items=40, max_states=100000, pulse=
     for k in range(2, min(max_size, len(ordered)) + 1):
         for combo in combinations(ordered, k):
             states += 1
-            if pulse and states % 1024 == 0:
-                pulse()
+            if states % 1024 == 0:
+                if search_progress:
+                    search_progress(states)
+                if pulse:
+                    pulse()
             if states > max_states:
+                if search_progress:
+                    search_progress(states)
                 return [], True, states
             ids = frozenset(r["id"] for r in combo)
             if len({r["kind"] for r in combo}) < 2:
@@ -33,6 +40,8 @@ def zero_combinations(items, max_size=6, max_items=40, max_states=100000, pulse=
             if any(prev < ids for prev in found):
                 continue
             found.append(ids)
+    if search_progress:
+        search_progress(states)
     return found, False, states
 
 
@@ -40,12 +49,14 @@ def days(a, b):
     return abs((date.fromisoformat(a[:10]) - date.fromisoformat(b[:10])).days)
 
 
-def bank_edges(cash, bank, window, strong=True, weak_allowed=None, pulse=None):
+def bank_edges(
+    cash, bank, window, strong=True, weak_allowed=None, pulse=None, track=None
+):
     edges = []
     index = defaultdict(list)
     for b in bank:
         index[(b["currency"], b["signed_amount_minor"])].append(b)
-    for a in cash:
+    for a in track(cash) if track else cash:
         if pulse:
             pulse()
         for b in index[(a["currency"], a["signed_amount_minor"])]:
@@ -69,7 +80,7 @@ def bank_edges(cash, bank, window, strong=True, weak_allowed=None, pulse=None):
     return edges
 
 
-def reversals(bank, pulse=None):
+def reversals(bank, pulse=None, track=None):
     edges = []
     index = defaultdict(list)
     for b in bank:
@@ -77,7 +88,7 @@ def reversals(bank, pulse=None):
             index[
                 (b["currency"], b["payload"]["terminal_id"], b["payload"]["seq_id"])
             ].append(b)
-    for a in bank:
+    for a in track(bank) if track else bank:
         if pulse:
             pulse()
         if a["payload"]["event_class"] != "SALE":

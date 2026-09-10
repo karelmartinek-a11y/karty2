@@ -171,7 +171,7 @@ class SyncService:
             )
             if compatibility and not checkpoint:
                 c.execute(
-                    "INSERT INTO api_compatibility_run VALUES(?,?,NULL,'BH-CONNECTOR-1','0.3.1',?,?,?,'NOT_ATTEMPTED',?,NULL)",
+                    "INSERT INTO api_compatibility_run VALUES(?,?,NULL,'BH-CONNECTOR-1','0.3.2',?,?,?,'NOT_ATTEMPTED',?,NULL)",
                     (op, ctx, st["credential_revision"], start, end, now()),
                 )
 

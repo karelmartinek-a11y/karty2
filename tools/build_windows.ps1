@@ -20,4 +20,4 @@ if (!$compiler) {
 } else { $compilerPath = $compiler.Source }
 & $compilerPath tools\installer.iss
 if ($LASTEXITCODE -ne 0) { throw 'Vytvoření instalátoru selhalo.' }
-Get-FileHash dist\installer\KajovoKarty-Setup-0.3.1.exe -Algorithm SHA256 | Format-List | Out-File docs\windows-installer-sha256.txt
+Get-FileHash dist\installer\KajovoKarty-Setup-0.3.2.exe -Algorithm SHA256 | Format-List | Out-File docs\windows-installer-sha256.txt

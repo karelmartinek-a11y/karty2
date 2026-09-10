@@ -76,8 +76,9 @@ class MatchingService:
             return AutoRun(self.db, self.settings, cancel, progress).execute(self._run)
 
     def _run(self, run):
-        cancel, progress, pulse = run.cancel, run.progress, run.pulse
+        cancel, pulse = run.cancel, run.pulse
         settings = run.settings
+        run.stage("Načítání pomocných dokladů a rezervací")
         st, entities, links, overrides, coverage = self._helper()
         require(
             st["status"] != "REFRESHING",
@@ -99,9 +100,11 @@ class MatchingService:
                 "STALE_STATE",
                 "Publikovaný pomocný graf neodpovídá aktuálnímu připojení.",
             )
+        run.stage("Načítání nespárovaných zdrojových položek")
         initial = self._free()
         run.inputs = {r["id"]: r["content_hash"] for r in initial}
         run.analyzed.update(r["currency"] for r in initial)
+        run.inputs_loaded = True
         rounds = created = 0
         limits = run.limits
         suppressed = set()
@@ -113,7 +116,8 @@ class MatchingService:
         invoice_index = {}
         invoice_links = {}
         chain_cache = {}
-        for entity in entities.values():
+        run.stage("Indexace pomocných dokladů", len(entities), "dokladů a rezervací")
+        for entity in run.track(entities.values()):
             pulse()
             if (
                 entity["resource_type"] == "invoice"
@@ -123,7 +127,8 @@ class MatchingService:
                 key = code_key(entity["payload"].get("code"))
                 if key:
                     invoice_index.setdefault(key, {})[entity["external_id"]] = entity
-        for link in links:
+        run.stage("Indexace vazeb dokladů", len(links), "vazeb")
+        for link in run.track(links):
             pulse()
             if (
                 link["relation"] == "INVOICE"
@@ -268,8 +273,8 @@ class MatchingService:
             unknown = set()
             allc = []
             blocked = set()
-            for r in rows:
-                pulse()
+            run.stage("Booking — ověřování řetězců a sestavení kandidátů", len(rows))
+            for r in run.track(rows):
                 if r["kind"] == "CASHBOOK_CARD":
                     ch = chain(r)
                     chains[r["id"]] = ch
@@ -285,15 +290,22 @@ class MatchingService:
                 components.setdefault(key, []).append(r)
             if st["status"] != "READY":
                 return [], chains, unknown, blocked
-            for key, items in sorted(components.items()):
+            run.stage(
+                "Booking — prohledávání kombinací částek",
+                len(components),
+                "skupin kandidátů",
+            )
+            for key, items in run.track(sorted(components.items())):
                 if {r["kind"] for r in items} != {"CASHBOOK_CARD", "BOOKING"}:
                     continue  # Absence of one side proves B impossible without a search.
+                run.search_progress(0)
                 found, limit, states = zero_combinations(
                     items,
                     settings["matching.max_combination"],
                     settings["matching.max_component_items"],
                     settings["matching.max_search_states"],
                     pulse=pulse,
+                    search_progress=run.search_progress,
                 )
                 if limit:
                     limits.add(key)
@@ -306,7 +318,21 @@ class MatchingService:
             nonlocal created
             lookup = {r["id"]: r for r in rows}
             count = 0
-            for ids in isolated(candidates):
+            matches = isolated(candidates)
+            names = {
+                "A": "Bankovní storna",
+                "B": "Booking a pokladna",
+                "C_STRONG": "Banka se shodným VS",
+                "C_WEAK": "Banka podle částky a dokladů",
+                "D": "Protizápisy Bookingu",
+            }
+            run.stage(
+                names[rule] + " — kontrola důkazů a zápis shod",
+                len(matches),
+                "kandidátních skupin",
+            )
+            for ids in matches:
+                pulse()
                 require(
                     not (cancel and cancel.is_set()),
                     "CANCELLED",
@@ -382,6 +408,8 @@ class MatchingService:
                     ).fetchone()
                 if supp:
                     suppressed.update(ids)
+                    run.step_done += 1
+                    run.emit_progress()
                     continue
                 evidence = {
                     "rule_id": rule,
@@ -403,11 +431,11 @@ class MatchingService:
                     evidence=evidence,
                     auto_context=run,
                 )
+                run.step_done += 1
                 run.record(rule, chosen)
                 count += 1
                 created += 1
-                if progress:
-                    progress(f"Automatické párování: kolo {rounds}, skupin {created}")
+            run.emit_progress(True)
             return count
 
         while True:
@@ -421,7 +449,9 @@ class MatchingService:
                 "Párování bylo zrušeno.",
             )
             rows = self._free()
-            ac = reversals([r for r in rows if r["kind"] == "BANK_CARD"], pulse)
+            bank = [r for r in rows if r["kind"] == "BANK_CARD"]
+            run.stage("Bankovní storna — prověřování transakcí", len(bank))
+            ac = reversals(bank, pulse, track=run.track)
             count += commit("A", ac, rows)
             rows = self._free()
             bc, chains, unknown, blocked = candidates_b(rows)
@@ -429,25 +459,53 @@ class MatchingService:
             rows = self._free()
             cash = [r for r in rows if r["kind"] == "CASHBOOK_CARD"]
             bank = [r for r in rows if r["kind"] == "BANK_CARD"]
+            run.stage(
+                "Banka — hledání přesné shody VS a částky",
+                len(cash),
+                "pokladních položek",
+            )
             strong = bank_edges(
-                cash, bank, settings["matching.bank_window_days"], pulse=pulse
+                cash,
+                bank,
+                settings["matching.bank_window_days"],
+                pulse=pulse,
+                track=run.track,
             )
             count += commit("C_STRONG", strong, rows)
             rows = self._free()
             cash = [r for r in rows if r["kind"] == "CASHBOOK_CARD"]
             bank = [r for r in rows if r["kind"] == "BANK_CARD"]
+            run.stage(
+                "Banka — hledání přesné shody VS a částky",
+                len(cash),
+                "pokladních položek",
+            )
             strong = bank_edges(
-                cash, bank, settings["matching.bank_window_days"], pulse=pulse
+                cash,
+                bank,
+                settings["matching.bank_window_days"],
+                pulse=pulse,
+                track=run.track,
             )
             incident = set().union(*strong) if strong else set()
-            chains = {r["id"]: chain(r) for r in cash}
+            run.stage(
+                "Banka — ověření pomocných dokladů", len(cash), "pokladních položek"
+            )
+            chains = {r["id"]: chain(r) for r in run.track(cash)}
+            weak_cash = [r for r in cash if r["id"] not in incident]
+            run.stage(
+                "Banka — hledání shod podle částky a dokladů",
+                len(weak_cash),
+                "pokladních položek",
+            )
             weak = bank_edges(
-                [r for r in cash if r["id"] not in incident],
+                weak_cash,
                 [r for r in bank if r["id"] not in incident],
                 settings["matching.bank_window_days"],
                 False,
                 lambda r: chains[r["id"]][0] == "OTHER",
                 pulse=pulse,
+                track=run.track,
             )
             count += commit("C_WEAK", weak, rows, chains)
             rows = self._free()
@@ -461,7 +519,12 @@ class MatchingService:
                     by_reference.setdefault(
                         (r["currency"], r["payload"]["booking_reference"]), []
                     ).append(r)
-                for a, b in (
+                run.stage(
+                    "Booking — prověřování protizápisů",
+                    sum(len(g) * (len(g) - 1) // 2 for g in by_reference.values()),
+                    "dvojic",
+                )
+                for a, b in run.track(
                     pair
                     for group in by_reference.values()
                     for pair in combinations(group, 2)
@@ -524,7 +587,7 @@ class MatchingService:
             count += commit("D", d, rows, dproof, legacy_dproof)
             if not count:
                 break
-        pulse()
+        run.stage("Ukládání důvodů zbývajících nespárovaných položek", len(rows))
         with self.db.transaction() as c:
             run.validate(c)
             domain_revision = c.execute("SELECT revision FROM domain_clock").fetchone()[
@@ -539,6 +602,7 @@ class MatchingService:
                 i for candidate in [*ac, *bc, *strong, *weak, *d] for i in candidate
             )
             for row in rows:
+                run.check_cancel()
                 i = row["id"]
                 code = (
                     chain_reasons.get(i)
@@ -576,3 +640,6 @@ class MatchingService:
                     "INSERT OR REPLACE INTO work_reason VALUES(?,?,?,?,?)",
                     (i, code, domain_revision, st["revision"], settings_revision),
                 )
+                run.step_done += 1
+                run.emit_progress()
+        run.emit_progress(True)

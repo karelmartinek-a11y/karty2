@@ -7,6 +7,15 @@ from kajovokarty.domain.core import AppError, canonical, now, require
 from kajovokarty.application.work import WorkService
 
 
+class AutoProgress(str):
+    """A backward-compatible message carrying an immutable progress snapshot."""
+
+    def __new__(cls, message, snapshot):
+        value = super().__new__(cls, message)
+        value.snapshot = snapshot
+        return value
+
+
 class AutoRun:
     def __init__(self, db, settings, cancel=None, progress=None):
         self.db, self.settings_service = db, settings
@@ -20,7 +29,14 @@ class AutoRun:
         self.unknown = set()
         self.last_pulse = 0.0
         self.inputs = {}
+        self.inputs_loaded = False
         self.guard = None
+        self.stage_label = "Příprava nastavení a podkladů"
+        self.step_total = None
+        self.step_done = 0
+        self.unit = "položek"
+        self.last_event = 0.0
+        self.search_states = None
 
     @staticmethod
     def signature(c):
@@ -61,6 +77,59 @@ class AutoRun:
             "Párování bylo zrušeno; již dokončené skupiny zůstávají zachovány.",
         )
 
+    def emit_progress(self, force=False):
+        current = time.monotonic()
+        if not self.progress or (not force and current - self.last_event < 0.2):
+            return
+        total = sum(self.analyzed.values())
+        self.progress(
+            AutoProgress(
+                f"Automatické párování: kolo {self.rounds}, skupin {self.created}; {self.stage_label}",
+                {
+                    "stage": self.stage_label,
+                    "step_total": self.step_total,
+                    "step_done": self.step_done,
+                    "unit": self.unit,
+                    "total": total,
+                    "inputs_loaded": self.inputs_loaded,
+                    "resolved": self.resolved,
+                    "remaining": total - self.resolved,
+                    "groups": self.created,
+                    "round": self.rounds,
+                    "search_states": self.search_states,
+                    "limits": len(self.limits),
+                    "currencies": {
+                        cur: {
+                            "resolved": self.resolved_by_currency[cur],
+                            "remaining": self.analyzed[cur]
+                            - self.resolved_by_currency[cur],
+                        }
+                        for cur in ("CZK", "EUR")
+                    },
+                },
+            )
+        )
+        self.last_event = current
+
+    def stage(self, label, total=None, unit="položek"):
+        self.stage_label, self.step_total, self.unit = label, total, unit
+        self.step_done = 0
+        self.search_states = None
+        self.check_cancel()
+        self.emit_progress(True)
+
+    def search_progress(self, states):
+        self.search_states = states
+        self.emit_progress()
+
+    def track(self, items):
+        for item in items:
+            self.pulse()
+            yield item
+            self.step_done += 1
+            self.emit_progress()
+        self.emit_progress(True)
+
     def pulse(self):
         self.check_cancel()
         current = time.monotonic()
@@ -70,12 +139,9 @@ class AutoRun:
                     "UPDATE operation SET heartbeat_at=?,progress_current=?,progress_total=? WHERE id=?",
                     (now(), self.resolved, sum(self.analyzed.values()), self.op),
                 )
-            if self.progress:
-                self.progress(
-                    f"Automatické párování: kolo {self.rounds}, skupin {self.created}; prohledávám kandidáty…"
-                )
             self.last_pulse = current
             self.check_cancel()
+        self.emit_progress()
 
     def validate(self, c, ids=()):
         self.check_cancel()
@@ -108,6 +174,7 @@ class AutoRun:
         self.created_by_currency[currency] += 1
         self.resolved_by_currency[currency] += len(rows)
         self.rules[rule] += 1
+        self.emit_progress(True)
 
     def summary(self, fixed_point):
         kpi = WorkService(self.db).query({"status": "unresolved"}, page_size=1)["kpi"]
@@ -184,12 +251,14 @@ class AutoRun:
         self.check_cancel()
         self.op = self.db.start_operation("AUTO_MATCH")
         try:
+            self.emit_progress(True)
             self.settings = self.settings_service.get()
             with self.db.connect() as c:
                 self.guard = self.signature(c)
             algorithm(self)
             with self.db.transaction() as c:
                 self.validate(c)
+            self.stage("Kontrola výsledků a uložení souhrnu")
             result = self.summary(True)
             self.finish(result)
             return result

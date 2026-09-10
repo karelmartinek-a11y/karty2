@@ -572,7 +572,7 @@ class ReportService:
             metadata = {
                 "report_schema_id": "KAJOVOKARTY-EXPORT-1",
                 "report_id": report_id,
-                "app_build": "0.3.1",
+                "app_build": "0.3.2",
                 "exported_at": now(),
                 "database_snapshot_id": uid(),
                 "selection_mode": "SINGLE_OBJECT"

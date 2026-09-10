@@ -3,7 +3,7 @@ requires = ["setuptools==78.1.0", "wheel==0.45.1"]
 build-backend = "setuptools.build_meta"
 [project]
 name = "kajovokarty"
-version = "0.3.1"
+version = "0.3.2"
 description = "Lokální desktopová rekonsiliace karetních pohybů hotelu"
 requires-python = ">=3.12,<3.13"
 dependencies = ["PySide6==6.8.3", "httpx==0.28.1", "xlrd==2.0.1", "openpyxl==3.1.5", "reportlab==4.3.1", "tzdata==2025.2"]
