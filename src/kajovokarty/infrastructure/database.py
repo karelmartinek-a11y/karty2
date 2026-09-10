@@ -1,7 +1,9 @@
 from __future__ import annotations
-from contextlib import contextmanager
+from contextlib import contextmanager, closing
 from pathlib import Path
 import sqlite3, threading, time
+import os
+from weakref import WeakValueDictionary
 from kajovokarty.domain.core import (
     AppError,
     bytehash,
@@ -14,10 +16,15 @@ from kajovokarty.domain.core import (
 
 
 class Database:
+    _gates = WeakValueDictionary()
+    _gates_lock = threading.Lock()
+
     def __init__(self, path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.gate = threading.RLock()
+        key = os.path.normcase(str(self.path.resolve()))
+        with self._gates_lock:
+            self.gate = self._gates.setdefault(key, threading.RLock())
         with self.connect() as c:
             version = c.execute("PRAGMA user_version").fetchone()[0]
             require(
@@ -26,7 +33,9 @@ class Database:
                 "Databáze pochází z novější verze programu.",
             )
             if version == 0:
-                sql = (Path(__file__).parents[1] / "migrations/001.sql").read_text()
+                sql = (Path(__file__).parents[1] / "migrations/001.sql").read_text(
+                    encoding="utf-8"
+                )
                 c.executescript("BEGIN IMMEDIATE;\n" + sql)
                 for table in (
                     "financial_source",
@@ -79,12 +88,14 @@ class Database:
             if version == 1:
                 self._migration_backup(c)
             if version < 2:
-                sql = (Path(__file__).parents[1] / "migrations/002.sql").read_text()
+                sql = (Path(__file__).parents[1] / "migrations/002.sql").read_text(
+                    encoding="utf-8"
+                )
                 try:
                     c.executescript("BEGIN IMMEDIATE;\n" + sql)
                     c.execute(
                         "INSERT INTO schema_migration VALUES(2,?,?,?)",
-                        (now(), "0.3.0", bytehash(sql.encode())),
+                        (now(), "0.3.1", bytehash(sql.encode())),
                     )
                     c.execute("PRAGMA user_version=2")
                     c.commit()
@@ -102,7 +113,7 @@ class Database:
 
         with tempfile.TemporaryDirectory(dir=self.path.parent) as folder:
             candidate = Path(folder) / "database.sqlite"
-            with sqlite3.connect(candidate) as dest:
+            with closing(sqlite3.connect(candidate)) as dest:
                 source.backup(dest)
                 dest.execute("PRAGMA journal_mode=DELETE")
                 dest.execute("PRAGMA secure_delete=ON")
@@ -118,7 +129,7 @@ class Database:
             raw = candidate.read_bytes()
             manifest = {
                 "schema": 1,
-                "app_build": "0.3.0",
+                "app_build": "0.3.1",
                 "created_at": now(),
                 "files": {"database.sqlite": bytehash(raw)},
                 "secrets_included": False,

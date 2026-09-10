@@ -1409,13 +1409,34 @@ class MainWindow(QMainWindow):
         self.run(lambda p: self.sync.scope(), confirm, False)
 
     def start_auto(self):
+        if self.busy:
+            return
+
         def completed(result):
+            from kajovokarty.ui.auto_result import show_result
+
             self.after_mutation(result)
+            show_result(self, result)
             self.status.setText(
-                f"Automatika celé databáze: {result['created_groups']} nových skupin, {result['rounds']} kol; limit hledání u {result['limited_components']} oblastí. Nejednoznačné položky zůstaly k ručnímu párování. Ctrl+Z vrátí poslední skupinu."
+                f"Automatika: {result['newly_resolved_leaves']} nově vyřízených položek v {result['created_groups']} skupinách; {result['rounds']} kol. Výsledek je uložen v detailu operace."
             )
 
-        self.run(lambda p: self.matching.run(self.cancel, p), completed)
+        def interrupted(error):
+            from kajovokarty.ui.auto_result import show_result
+
+            self.after_mutation()
+            result = error.details.get("auto_result")
+            if result:
+                show_result(self, result, error)
+                self.status.setText(error.message)
+            else:
+                self.show_error(error)
+
+        self.run(
+            lambda p: self.matching.run(self.cancel, p),
+            completed,
+            error_handler=interrupted,
+        )
 
     def open_detail(self, *args):
         rows = self.selected_rows()
@@ -1432,6 +1453,31 @@ class MainWindow(QMainWindow):
                 ),
                 False,
             )
+        elif self.scope == 7 and r.get("type") == "AUTO_MATCH":
+
+            def load(progress):
+                with self.db.connect() as c:
+                    return dict(
+                        c.execute(
+                            "SELECT * FROM operation WHERE id=?", (r["id"],)
+                        ).fetchone()
+                    )
+
+            def show(operation):
+                from kajovokarty.ui.auto_result import show_result
+
+                result = json.loads(operation["recovery_json"])
+                error = json.loads(operation["safe_error_json"] or "{}")
+                if result.get("operation_id"):
+                    show_result(
+                        self,
+                        result,
+                        AppError(error["code"], error["message"]) if error else None,
+                    )
+                else:
+                    text_dialog(self, "Detail běhu automatiky", canonical(operation))
+
+            self.run(load, show, False)
         elif self.scope == 3:
             self.helper_dialog(r)
         else:
@@ -1865,7 +1911,7 @@ class MainWindow(QMainWindow):
         text_dialog(
             self,
             "Nápověda",
-            "1. Importovat → zvolit zdroj a úplné exporty → zkontrolovat náhled → Importovat.\n2. Načíst BetterHotel pouze po zadání tokenů v Nastavení.\n3. Spustit automatické párování výslovným tlačítkem.\n4. Ručně: přetáhnout platbu na protějšek nebo skupinu. Členy upravíte v Párovací ploše; vytažením do zóny Rozpárovat je uvolníte. CZK a EUR nelze spojit. Rozdíl musí být přesně nula pro Vyřízeno.\n5. Rozložení zachová podskupiny. Ctrl+Z / Ctrl+Y vrací platné příkazy. Import se nevrací.\n6. Každý sloupec: šipka v záhlaví otevře filtr hodnot; kliknutí na název přepíná řazení. Sestavy: CSV jako ZIP, XLSX, PDF.\n7. Zálohy neobsahují tokeny. Obnova vytvoří nové připojení, pomocná data je třeba úplně načíst.\n\nKlávesy: Ctrl+I import, Ctrl+F hledání, Ctrl+Space výběr, Ctrl+M skupina, Enter detail, F2 poznámka, F5 místní obnova.\n\nVývojová verze 0.3.0 — rozsah ověření a zbývající omezení jsou v docs/VALIDATION.md repozitáře.",
+            "1. Importovat → zvolit zdroj a úplné exporty → zkontrolovat náhled → Importovat.\n2. Načíst BetterHotel pouze po zadání tokenů v Nastavení.\n3. Spustit automatické párování výslovným tlačítkem.\n4. Ručně: přetáhnout platbu na protějšek nebo skupinu. Členy upravíte v Párovací ploše; vytažením do zóny Rozpárovat je uvolníte. CZK a EUR nelze spojit. Rozdíl musí být přesně nula pro Vyřízeno.\n5. Rozložení zachová podskupiny. Ctrl+Z / Ctrl+Y vrací platné příkazy. Import se nevrací.\n6. Každý sloupec: šipka v záhlaví otevře filtr hodnot; kliknutí na název přepíná řazení. Sestavy: CSV jako ZIP, XLSX, PDF.\n7. Zálohy neobsahují tokeny. Obnova vytvoří nové připojení, pomocná data je třeba úplně načíst.\n\nKlávesy: Ctrl+I import, Ctrl+F hledání, Ctrl+Space výběr, Ctrl+M skupina, Enter detail, F2 poznámka, F5 místní obnova.\n\nVývojová verze 0.3.1 — rozsah ověření a zbývající omezení jsou v docs/VALIDATION.md repozitáře.",
         )
 
     def save_filter(self):

@@ -2,7 +2,7 @@
 
 Česká desktopová aplikace Python 3.12 / PySide6 pro rekonsiliaci pokladních karet, terminálových transakcí a výplat Booking.com. Finanční data zůstávají v lokální SQLite databázi, BetterHotel se pouze čte přes GET.
 
-**Verze 0.3.0** přidává Párovací plochu s přetahováním plateb, přesunem a vyjmutím členů, atomickým Undo/Redo a přehledem rozdílu. Každý sloupec všech tabulek má řazení a filtr hodnot jako v Excelu. Návrh, ovládání a ověření: [docs/UI_WORKFLOW.md](docs/UI_WORKFLOW.md).
+**Verze 0.3.1** opravuje automatické párování: pouze výslovné tlačítko, kontrola platnosti důkazů při každém zápisu, bezpečné zrušení, trvalý výsledek po měnách a zachování starších zákazů spojení. Forenzní nálezy a testy: [docs/AUTO_AUDIT.md](docs/AUTO_AUDIT.md). Přetahování plateb a Excelové sloupcové filtry z 0.3.0 zůstávají popsané v [docs/UI_WORKFLOW.md](docs/UI_WORKFLOW.md).
 
 Dodávka obsahuje zdrojový repozitář a předpis sestavení Windows instalátoru. Sestavený EXE není součástí ZIPu. Testování na čistém Windows profilu a s živým BetterHotel API dosud neproběhlo; úplná akceptace SSOT proto není prohlášena.
 
@@ -64,8 +64,10 @@ Původní testovací soubory obsahují údaje z uživatelem dodaného SSOT. Prod
 
 ## Přechod z 0.1.0
 
-Spusťte 0.3.0 nad existující datovou složkou. Před migrací ze schématu 1 vznikne ověřená záloha bez tokenů. Migrace 002 je atomická a zachová finanční zdroje i historii. Pomocný graf se označí STALE; před novým použitím v automatice proveďte úplné načtení BetterHotel. Při chybě umístění nebo databáze se otevře zotavení, prázdná náhradní databáze se tiše nevytváří.
+Spusťte 0.3.1 nad existující datovou složkou. Před migrací ze schématu 1 vznikne ověřená záloha bez tokenů. Migrace 002 je atomická a zachová finanční zdroje i historii. Pomocný graf se označí STALE; před novým použitím v automatice proveďte úplné načtení BetterHotel. Při chybě umístění nebo databáze se otevře zotavení, prázdná náhradní databáze se tiše nevytváří.
 
 Přesun se provádí přes Nastavení a restartuje aplikaci. Původní složka zůstává zachována. Záloha neobsahuje přihlašovací tajemství; na jiném počítači je nutné tokeny znovu zadat. Ruční editace SQLite ani bootstrap souboru není běžný pracovní postup.
 
 Verze 0.3.0 používá stejné databázové schéma 2 jako 0.2.0. Nové přesuny využívají existující příkazy, historii a audit; finanční zdroje se nepřepisují.
+
+Automatika běží jen po stisku **Automaticky spárovat vše**, vždy nad celou databází. Výsledek je dostupný i později v Nastavení → operace AUTO_MATCH → detail. Po zrušení zůstanou dokončené skupiny zachovány; pokračování vyžaduje další výslovný stisk tlačítka.

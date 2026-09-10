@@ -7,7 +7,7 @@ import re, json
 root = Path(__file__).resolve().parents[1]
 out = root / "LICENSES"
 out.mkdir(exist_ok=True)
-lock = (root / "requirements.lock").read_text()
+lock = (root / "requirements.lock").read_text(encoding="utf-8")
 names = re.findall(r"^([a-zA-Z0-9_-]+)==", lock, re.M)
 records = []
 for name in names:
@@ -36,4 +36,6 @@ for name in names:
             "files": files,
         }
     )
-(out / "INDEX.json").write_text(json.dumps(records, ensure_ascii=False, indent=2))
+(out / "INDEX.json").write_text(
+    json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8"
+)

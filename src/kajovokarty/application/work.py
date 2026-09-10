@@ -228,12 +228,15 @@ class WorkService:
         require_zero=False,
         method="MANUAL",
         evidence=None,
+        auto_context=None,
     ):
         require(len(ids) >= 2, "GROUP_INVALID", "Vyberte alespoň dva různé kořeny.")
         require(
             len(note) <= 10000, "NOTE_INVALID", "Poznámka smí mít nejvýše 10 000 znaků."
         )
         with self.db.transaction() as c:
+            if auto_context is not None:
+                auto_context.validate(c, ids)
             objects, groups, children, parents, sources = self._graph(c, ids)
             self._check(objects, ids, revisions)
             require(
@@ -283,6 +286,8 @@ class WorkService:
                 c.execute("DELETE FROM work_selection WHERE object_id=?", (i,))
             after = self._snapshot(c, [gid, *ids])
             self._finish(c, cmd, "CREATE_GROUP", before, after, sb, self._supp(c, sb))
+            if auto_context is not None:
+                auto_context.accept_commit(c)
             return {"id": gid, "difference": diff, "command_id": cmd}
 
     def add_to_group(self, gid, ids, revisions):

@@ -26,7 +26,9 @@ EXCLUDED = {
 
 def main():
     root = Path(__file__).resolve().parents[1]
-    version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
+    version = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]["version"]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--output",

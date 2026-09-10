@@ -17,7 +17,9 @@ from kajovokarty.application.work_query import choices, FIELDS
 from kajovokarty.application.work import WorkService
 
 SCHEMA = json.loads(
-    (Path(__file__).parents[1] / "assets/export_schema.json").read_text()
+    (Path(__file__).parents[1] / "assets/export_schema.json").read_text(
+        encoding="utf-8"
+    )
 )
 REPORTS = {
     "unresolved": ["work_objects", "currency_totals"],
@@ -570,7 +572,7 @@ class ReportService:
             metadata = {
                 "report_schema_id": "KAJOVOKARTY-EXPORT-1",
                 "report_id": report_id,
-                "app_build": "0.3.0",
+                "app_build": "0.3.1",
                 "exported_at": now(),
                 "database_snapshot_id": uid(),
                 "selection_mode": "SINGLE_OBJECT"

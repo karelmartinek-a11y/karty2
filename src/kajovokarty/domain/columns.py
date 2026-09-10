@@ -32,6 +32,23 @@ def sql_token(field, value):
 
 
 REASON_NAMES = {
+    "AUTO_SUPPRESSED": "Automatické spojení ručně zakázáno",
+    "AUTO_SEARCH_LIMIT": "Dosažen limit hledání kombinací",
+    "MULTIPLE_CANDIDATES": "Více možných shod — vyberte ručně",
+    "HELPER_DATA_NOT_SYNCED": "Pomocná data nejsou ověřena pro toto období",
+    "HELPER_ENTITY_NOT_OBSERVED": "Vazba obsahuje neaktivní nebo neúplná pomocná data",
+    "HELPER_CHAIN_UNVERIFIED": "Nelze ověřit nepřítomnost vazby na pokladnu",
+    "CURRENCY_MISMATCH": "Nesouhlasí měna dokladového řetězce",
+    "CASHBOOK_NO_DOCUMENT": "Pokladní položka nemá jednoznačný doklad",
+    "DOCUMENT_NO_RESERVATION": "Doklad nemá jednoznačnou rezervaci",
+    "RESERVATION_NO_BOOKING_REFERENCE": "Neznámý kanál nebo chybějící Booking reference",
+    "BOOKING_REFERENCE_REJECTED": "Booking reference byla ručně odmítnuta",
+    "BOOKING_REFERENCE_REVIEW_REQUIRED": "Booking reference vyžaduje nové rozhodnutí",
+    "BOOKING_REFERENCE_NOT_FOUND": "Pro Booking referenci chybí importovaná platba",
+    "CASHBOOK_NO_COUNTERPART": "Pokladna: nenalezen protějšek",
+    "BANK_NO_COUNTERPART": "Terminál: nenalezen protějšek",
+    "BOOKING_NO_COUNTERPART": "Booking: nenalezen protějšek",
+    "RUN_NOT_COMPLETED": "Běh byl přerušen — zbývající položky vyžadují nový běh",
     "OPEN_AGGREGATE": "Otevřená skupina — zbývá rozdíl",
     "NO_COUNTERPART": "Nenalezen protějšek",
     "NO_HELPER": "Chybí aktuální pomocná data",
