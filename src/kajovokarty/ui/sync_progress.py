@@ -1,5 +1,6 @@
 """Live progress dialog for BetterHotel synchronization."""
 
+import re
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QProgressBar, QPlainTextEdit, QPushButton
 
@@ -15,6 +16,8 @@ class SyncProgressDialog(QDialog):
         self.cancel_callback = cancel
         self.stopping = False
         self.finished = False
+        self.calls = 0
+        self.items = 0
 
         layout = QVBoxLayout(self)
         self.phase = QLabel("Připravuji načítání…")
@@ -26,6 +29,8 @@ class SyncProgressDialog(QDialog):
         self.detail = QLabel("Čekám na první odpověď BetterHotelu…")
         self.detail.setWordWrap(True)
         layout.addWidget(self.detail)
+        self.total = QLabel("Celkem odpovědí: 0 · načtených položek: 0")
+        layout.addWidget(self.total)
         self.history = QPlainTextEdit()
         self.history.setReadOnly(True)
         self.history.setMaximumBlockCount(200)
@@ -39,6 +44,15 @@ class SyncProgressDialog(QDialog):
         if not self.stopping:
             self.phase.setText(message)
         self.detail.setText("Probíhá komunikace s BetterHotelem…")
+        if message.startswith("API →"):
+            self.calls += 1
+        match = re.search(r"API ← HTTP \d+: (\d+) položek", message)
+        if match:
+            self.items += int(match.group(1))
+            self.detail.setText("Poslední odpověď přijata a zpracovává se…")
+        self.total.setText(
+            f"Celkem API volání: {self.calls} · načtených položek: {self.items}"
+        )
         if not self.history.toPlainText() or self.history.toPlainText().splitlines()[-1] != message:
             self.history.appendPlainText(message)
 

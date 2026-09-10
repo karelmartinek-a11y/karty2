@@ -1363,6 +1363,7 @@ class MainWindow(QMainWindow):
                 self.settings.get(),
                 self.cancel,
                 proxy_auth=self.settings.proxy_auth(),
+                progress=progress,
             )
             try:
                 return self.sync.resume(http, op, progress)
@@ -1404,6 +1405,7 @@ class MainWindow(QMainWindow):
                     self.settings.get(),
                     self.cancel,
                     proxy_auth=self.settings.proxy_auth(),
+                    progress=progress,
                 )
                 try:
                     return self.sync.full(http, compatibility, progress, scope)

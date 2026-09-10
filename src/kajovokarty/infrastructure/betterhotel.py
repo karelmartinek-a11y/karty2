@@ -88,6 +88,7 @@ class BetterHotelClient:
         cancel=None,
         transport=None,
         proxy_auth=None,
+        progress=None,
     ):
         require(
             access
@@ -108,6 +109,7 @@ class BetterHotelClient:
         self.logger = None
         self.correlation_id = None
         self.cancel = cancel
+        self.progress = progress
         self.stats = {}
         self.last_request = 0
         proxy_url = self.settings.get("network.proxy_url")
@@ -153,6 +155,10 @@ class BetterHotelClient:
             if code not in stat["error_codes"]:
                 stat["error_codes"].append(code)
 
+    def report(self, message):
+        if self.progress:
+            self.progress(message)
+
     async def _attempt(self, url, params):
         async with asyncio.timeout(self.attempt_deadline):
             return await self.client.get(url, params=params or [])
@@ -183,6 +189,12 @@ class BetterHotelClient:
             self.check_cancel()
             started = time.monotonic()
             try:
+                query = "&".join(f"{key}={value}" for key, value in (params or []))
+                self.report(
+                    f"API → GET {url.split('/api/', 1)[-1]}"
+                    + (f"?{query}" if query else "")
+                    + f" (pokus {attempt + 1})"
+                )
                 response = self.loop.run_until_complete(self._attempt(url, params))
                 status = response.status_code
                 if self.logger:
@@ -248,6 +260,10 @@ class BetterHotelClient:
                 data = body.get("data", body) if isinstance(body, dict) else body
                 items = data if isinstance(data, list) else [data] if data else []
                 stat["item_count"] += len(items)
+                self.report(
+                    f"API ← HTTP {status}: {len(items)} položek, celkem endpoint "
+                    f"{stat['item_count']} ({round((time.monotonic() - started) * 1000)} ms)"
+                )
                 if stat["state"] != "FAIL":
                     stat["state"] = (
                         "PASS_NONEMPTY" if stat["item_count"] else "PASS_EMPTY"
@@ -263,6 +279,10 @@ class BetterHotelClient:
                 return body
             except (httpx.TransportError, TimeoutError):
                 if attempt < self.settings.get("sync.retry_count", 3):
+                    self.report(
+                        f"API ! síťová chyba, opakuji ({attempt + 2}/"
+                        f"{self.settings.get('sync.retry_count', 3) + 1})"
+                    )
                     self.wait(0.5 * 2**attempt + random.uniform(0, 0.2))
                     continue
                 e = AppError(
@@ -288,6 +308,10 @@ class BetterHotelClient:
                 query.append(("count", 25))
             if cursor:
                 query.append(("cursor", cursor))
+            self.report(
+                f"Načítám stránku {template}"
+                + (f" (kurzor {cursor})" if cursor else " (první stránka)")
+            )
             body = self.get(template, ids, query)
             require(
                 isinstance(body, dict) and "data" in body,
@@ -302,6 +326,7 @@ class BetterHotelClient:
                 "Neplatná kolekce.",
             )
             result.extend(data)
+            self.report(f"Zpracováno {len(result)} položek z {template}")
             meta = body.get("meta", {})
             require(isinstance(meta, dict), "API_SCHEMA", "Neplatná metadata.")
             if "total_count" in meta:
@@ -313,6 +338,7 @@ class BetterHotelClient:
             more = meta.get("has_more", False)
             require(type(more) is bool, "API_SCHEMA", "has_more musí být boolean.")
             if not more:
+                self.report(f"Dokončeno {template}: celkem {len(result)} položek")
                 return result
             cursor = meta.get("cursor")
             require(
