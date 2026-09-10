@@ -8,7 +8,7 @@ from kajovokarty.domain.core import (
     local_time,
     identifier,
 )
-from kajovokarty.domain.helpers import extract_references, reference_decision, merge
+from kajovokarty.domain.helpers import extract_references, reference_decision, merge, normalize_entity
 from kajovokarty.domain.matching import isolated, zero_combinations
 
 
@@ -38,6 +38,10 @@ def test_invalid_money(s):
 @given(st.integers(-LIMIT, LIMIT))
 def test_money_roundtrip(n):
     assert money(decimal_money(n)) == n
+
+
+def test_api_helper_money_rounds_calculated_fractional_cents():
+    assert normalize_entity("bill_item", {"id": "B1", "amount": "12.345"}, {"EUR": "EUR"})["amount"] == "12.35"
 
 
 def test_dst():

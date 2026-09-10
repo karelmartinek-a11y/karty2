@@ -2,6 +2,7 @@
 
 import re, html, unicodedata
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from kajovokarty.domain.core import (
     AppError,
     decimal_money,
@@ -14,6 +15,21 @@ from kajovokarty.domain.core import (
 )
 
 REFERENCE_VERSION = "BOOKING-NOTE-1"
+
+
+def api_money(value):
+    """Normalize BetterHotel helper amounts to cents.
+
+    BetterHotel can return calculated helper totals with more than two decimal
+    places. These are informational values, not financial source amounts, so
+    they are rounded half-up at the API boundary before canonicalization.
+    """
+    try:
+        amount = Decimal(str(value))
+        amount = amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return decimal_money(int(amount * 100))
+    except (InvalidOperation, ValueError, TypeError, OverflowError):
+        raise AppError("API_SCHEMA", "Neplatná částka z API.")
 
 
 def extract_references(notes, channel):
@@ -198,7 +214,7 @@ def normalize_entity(kind, raw, currencies, parent_currency=None):
             k in ("total", "subtotal", "deposit", "amount", "balance", "signed_amount")
             and value is not None
         ):
-            value = decimal_money(money(value))
+            value = api_money(value)
         if (
             k in ("date", "due_date", "vat_date", "archived", "paid", "payed")
             and value is not None
