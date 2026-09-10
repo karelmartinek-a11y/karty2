@@ -23,6 +23,10 @@ def api_reservation_source(value):
         return None
     if isinstance(value, dict):
         value = dict(value)
+        if "source_id" in value and "id" not in value and "uuid" not in value:
+            value["id"] = value.pop("source_id")
+        if "source_name" in value and "name" not in value:
+            value["name"] = value.pop("source_name")
         if "uuid" in value and "id" not in value:
             value["id"] = value.pop("uuid")
         if value.get("id") is not None:
@@ -30,7 +34,10 @@ def api_reservation_source(value):
         if value.get("name") is not None:
             value["name"] = text(value["name"])
         return value
-    return {"name": text(value)}
+    value = text(value)
+    if value and re.fullmatch(r"[0-9]+", value):
+        return {"id": value}
+    return {"name": value}
 
 
 def api_money(value):

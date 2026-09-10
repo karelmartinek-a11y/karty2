@@ -82,6 +82,19 @@ def test_reservation_source_aliases_are_normalized_and_merged():
     assert value["reservation_source"] == {"id": "7", "name": "Booking.com"}
 
 
+@pytest.mark.parametrize(
+    "source,alias,expected",
+    [
+        ("7", {"uuid": 7, "name": "Booking.com"}, {"id": "7", "name": "Booking.com"}),
+        ("Booking.com", {"name": "Booking.com"}, {"name": "Booking.com"}),
+        ({"source_id": 7, "source_name": "Booking.com"}, {"id": "7"}, {"id": "7", "name": "Booking.com"}),
+    ],
+)
+def test_reservation_source_alias_variants(source, alias, expected):
+    value = normalize_entity("reservation", {"id": "R1", "source": source, "reservation_source": alias}, {})
+    assert value["reservation_source"] == expected
+
+
 def test_identifiers():
     assert (
         identifier("001859") == "001859"
