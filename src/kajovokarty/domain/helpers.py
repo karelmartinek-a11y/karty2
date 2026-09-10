@@ -116,6 +116,10 @@ def merge(a, b):
     for k, v in b.items():
         if k not in result:
             result[k] = v
+        elif result[k] is None:
+            result[k] = v
+        elif v is None:
+            continue
         elif isinstance(result[k], dict) and isinstance(v, dict):
             result[k] = merge(result[k], v)
         else:

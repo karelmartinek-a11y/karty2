@@ -54,6 +54,14 @@ def test_terminal_edges_match_duplicates_one_to_one_without_variable_symbol():
     assert terminal_edges(cash, bank) == [{"c1", "b1"}, {"c2", "b2"}]
 
 
+def test_merge_enriches_null_projection_but_rejects_real_conflict():
+    assert merge({"reservation_source": None}, {"reservation_source": {"name": "Booking.com"}}) == {
+        "reservation_source": {"name": "Booking.com"}
+    }
+    with pytest.raises(AppError):
+        merge({"reservation_source": {"name": "Booking.com"}}, {"reservation_source": {"name": "Other"}})
+
+
 def test_api_helper_money_rounds_calculated_fractional_cents():
     assert normalize_entity("bill_item", {"id": "B1", "amount": "12.345"}, {"EUR": "EUR"})["amount"] == "12.35"
 
