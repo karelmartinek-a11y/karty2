@@ -1,5 +1,5 @@
 {
-  "source_build_sha256": "61302c9eeb4b50573a32886f1eefe426a8988eede7a1538ad1c12d243ec161e0",
+  "source_build_sha256": "db15cb1fa9523d1165995d2e5d4f442446a5871bdd1e4e8d2b3e7307bd772748",
   "algorithm": "SHA256 of canonical sorted input-path to SHA256 mapping",
   "files": {
     "src/kajovokarty/__init__.py": "bcd896275e2bfdcc39b7fed40ea0d021566f95a74a146c871f66afb0ba4ded58",
@@ -19,7 +19,7 @@
     "src/kajovokarty/application/settings.py": "e42de8e9ff6e8682ec1a49a22e1b267029f7908bdc050bbfe0755be89d942a23",
     "src/kajovokarty/application/snapshots.py": "2e1f73a4902f3386bef325381e5a86a32855d85d312ed4a5b6da8a956523fb7b",
     "src/kajovokarty/application/sync.py": "e464f0fc2ae4e0fb53f7063a6fcd89dc8b1b11eba82a5ad5e2fb9242c5a9ca16",
-    "src/kajovokarty/application/work.py": "5a398c89b3f432dea04bd895d1d333f98c700e2476d62e9559ef634ebf14af93",
+    "src/kajovokarty/application/work.py": "85a64a3ec12f5ecaeaa1f7d108bd888da8b9c99f8c1d68f8523e102984fb0d4f",
     "src/kajovokarty/application/work_query.py": "c051d28bd1f79087014933b7cc370462d1d43dda01329be131e5c6a4f5ce75c4",
     "src/kajovokarty/application/workspace.py": "94f44120ebd0bac32dadb850b6ad940751f546de4dc764b835c4f85e8069f3c9",
     "src/kajovokarty/assets/DejaVuSans.ttf": "ae7b7855e115a5966d8b1b3f80f254ccc117ec86f9965e202ee2940453837280",
@@ -78,7 +78,7 @@
     "tests/test_pairing_drag.py": "1688522f1a69d1c157a5a9b0a7ee0e992dbf4e2bdc3baf09af4afe31fc7ed482",
     "tests/test_pairing_ui.py": "a685aeb70cf4b5e0a3d6f7d5c0043400062332952cfae6b522e4633ae185d702",
     "tests/test_reports_backup.py": "da7ad94c777ddfbe00805609af4d9d1ea70d0c820edd8199f4dc06d6aa85541a",
-    "tests/test_work.py": "d7d3d455f056241b1c1c7fb21cb4d3f33c2625dd14429523d4834a67c8dead53",
+    "tests/test_work.py": "03b2f2529faa57a443a79bae0c2008ec338e4583b48ae5b8df7ee7591ac28910",
     "pyproject.toml": "198d907f13aaa9ab4c0c2474fec41a6043a3d52311ff1ff407fdd20ec4e29e23",
     "requirements.lock": "7858858ca1f18ead74e7c7ecb4a1cda4d48dfb23543f88d9eb630df8139cde6d",
     "requirements-dev.lock": "164a046f2cbd12edf9f3a414476e70d0a11432f5aa7f07d6cf60e31588a27f1d",

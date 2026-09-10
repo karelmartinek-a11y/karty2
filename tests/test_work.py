@@ -124,3 +124,15 @@ def test_mixed_selection_exports_as_two_reports(work):
         data = service.build(report, selection, {"text": "not-matching"})
         exported.extend(r["object_id"] for r in data["work_objects"])
     assert set(exported) == set(ids) and len(exported) == 2
+
+
+def test_sequential_undo_redo_with_equal_membership_timestamps(work, monkeypatch):
+    # Windows clocks may timestamp a whole batch identically. Recreated UUIDs
+    # must not turn an unchanged set of children into a semantic undo conflict.
+    import itertools
+    import kajovokarty.application.work as module
+
+    counter = itertools.count(1)
+    monkeypatch.setattr(module, "now", lambda: "2026-09-10T12:00:00.000000+00:00")
+    monkeypatch.setattr(module, "uid", lambda: f"{100000 - next(counter):032x}")
+    test_sequential_undo_redo(work)

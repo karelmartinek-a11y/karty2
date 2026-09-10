@@ -640,6 +640,9 @@ class WorkService:
                 return None
             s = json.loads(canonical(s))
             s["object"].pop("revision", None)
+            # Recreated membership IDs/timestamps may change presentation order.
+            # Financial membership is a set, so order is not a semantic change.
+            s["children"] = sorted(s["children"])
             if s["group"]:
                 s["group"].pop("updated_at", None)
             return s

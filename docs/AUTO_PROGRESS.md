@@ -14,5 +14,7 @@ Tlačítko **Zrušit párování**, Escape i zavírací křížek požádají o 
 - `MatchingService` měří dokončené kroky nad skutečnými iteracemi. Doménová enumerace má jen volitelné pozorovatele průběhu; pravidla, limity a pořadí shod se nemění.
 - `Job` předává události signálem do GUI vlákna. `AutoProgressDialog` nepřistupuje k databázi a nepoužívá sdílené měnitelné pracovní čítače.
 - `tests/test_auto_progress.py` používá skutečný pracovní běh a skutečné okno, pozastaví jej po první uložené skupině a kontroluje databázi, hodnoty, 50% ukazatel, oddělení měn, zrušovací tlačítko, zavírání i ukončení při výjimce.
-- Celá lokální sada: 152 testů, bez selhání a vynechání (`progress-regression-results.xml`). Nativní Windows CI je dohledatelné u commitu na GitHubu.
+- Celá lokální sada: 153 testů, bez selhání a vynechání (`progress-regression-results.xml`). Nativní Windows CI je dohledatelné u commitu na GitHubu.
 - `auto-progress.png` je snímek skutečného okna nad čtyřmi syntetickými zdrojovými položkami po uložení první skupiny.
+
+Při prvním nativním Windows ověření (`34524481710`) prošly všechny nové testy průběhu, ale starší sekvenční undo/redo odhalilo závislost sémantického porovnání členů skupiny na pořadí nových membership UUID při shodném času. Deterministická reprodukce s pevnou časovou značkou a obráceným pořadím UUID před opravou selhala. Porovnání nyní kanonicky řadí členy; nemění členství, částky ani kontroly revizí. Reprodukce je v `tests/test_work.py`.
