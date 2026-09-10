@@ -80,6 +80,25 @@ def bank_edges(
     return edges
 
 
+def terminal_edges(cash, bank, pulse=None, track=None):
+    """Pair cashbook and terminal entries by exact day, currency and amount."""
+    grouped_cash = defaultdict(list)
+    grouped_bank = defaultdict(list)
+    for row in cash:
+        grouped_cash[(row["local_date"], row["currency"], row["signed_amount_minor"])].append(row)
+    for row in bank:
+        grouped_bank[(row["local_date"], row["currency"], row["signed_amount_minor"])].append(row)
+    edges = []
+    for key in sorted(set(grouped_cash) & set(grouped_bank)):
+        left = sorted(grouped_cash[key], key=lambda r: r["source_identity"])
+        right = sorted(grouped_bank[key], key=lambda r: r["source_identity"])
+        for a, b in zip(left, right):
+            if pulse:
+                pulse()
+            edges.append(frozenset((a["id"], b["id"])))
+    return edges
+
+
 def reversals(bank, pulse=None, track=None):
     edges = []
     index = defaultdict(list)

@@ -8,6 +8,7 @@ from kajovokarty.domain.matching import (
     bank_edges,
     isolated,
     reversals,
+    terminal_edges,
     zero_combinations,
 )
 from kajovokarty.application.work import WorkService
@@ -322,6 +323,7 @@ class MatchingService:
             names = {
                 "A": "Bankovní storna",
                 "B": "Booking a pokladna",
+                "C_TERMINAL": "TerminĂˇl a pokladna podle dne a ÄŤĂˇstky",
                 "C_STRONG": "Banka se shodným VS",
                 "C_WEAK": "Banka podle částky a dokladů",
                 "D": "Protizápisy Bookingu",
@@ -453,6 +455,16 @@ class MatchingService:
             run.stage("Bankovní storna — prověřování transakcí", len(bank))
             ac = reversals(bank, pulse, track=run.track)
             count += commit("A", ac, rows)
+            rows = self._free()
+            cash = [r for r in rows if r["kind"] == "CASHBOOK_CARD"]
+            bank = [r for r in rows if r["kind"] == "BANK_CARD"]
+            run.stage(
+                "TerminĂˇl â€” hledĂˇnĂ­ shod podle dne, mÄ›ny a ÄŤĂˇstky",
+                len(cash),
+                "pokladnĂ­ch poloĹľek",
+            )
+            terminal = terminal_edges(cash, bank, pulse=pulse, track=run.track)
+            count += commit("C_TERMINAL", terminal, rows)
             rows = self._free()
             bc, chains, unknown, blocked = candidates_b(rows)
             count += commit("B", bc, rows, chains)

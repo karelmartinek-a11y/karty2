@@ -9,7 +9,7 @@ from kajovokarty.domain.core import (
     identifier,
 )
 from kajovokarty.domain.helpers import extract_references, reference_decision, merge, normalize_entity
-from kajovokarty.domain.matching import isolated, zero_combinations
+from kajovokarty.domain.matching import isolated, zero_combinations, terminal_edges
 
 
 @pytest.mark.parametrize(
@@ -38,6 +38,20 @@ def test_invalid_money(s):
 @given(st.integers(-LIMIT, LIMIT))
 def test_money_roundtrip(n):
     assert money(decimal_money(n)) == n
+
+
+def test_terminal_edges_match_duplicates_one_to_one_without_variable_symbol():
+    cash = [
+        {"id": "c1", "local_date": "2026-09-07", "currency": "EUR", "signed_amount_minor": 5000, "source_identity": "cash-1"},
+        {"id": "c2", "local_date": "2026-09-07", "currency": "EUR", "signed_amount_minor": 5000, "source_identity": "cash-2"},
+        {"id": "c3", "local_date": "2026-09-07", "currency": "EUR", "signed_amount_minor": 7000, "source_identity": "cash-3"},
+    ]
+    bank = [
+        {"id": "b1", "local_date": "2026-09-07", "currency": "EUR", "signed_amount_minor": 5000, "source_identity": "bank-1"},
+        {"id": "b2", "local_date": "2026-09-07", "currency": "EUR", "signed_amount_minor": 5000, "source_identity": "bank-2"},
+        {"id": "b3", "local_date": "2026-09-08", "currency": "EUR", "signed_amount_minor": 7000, "source_identity": "bank-3"},
+    ]
+    assert terminal_edges(cash, bank) == [{"c1", "b1"}, {"c2", "b2"}]
 
 
 def test_api_helper_money_rounds_calculated_fractional_cents():
