@@ -327,6 +327,8 @@ class BetterHotelClient:
             )
             result.extend(data)
             self.report(f"Zpracováno {len(result)} položek z {template}")
+            if not cursor and isinstance(meta, dict) and type(meta.get("total_count")) is int:
+                self.report(f"API rozsah {template}: {meta['total_count']} záznamů")
             meta = body.get("meta", {})
             require(isinstance(meta, dict), "API_SCHEMA", "Neplatná metadata.")
             if "total_count" in meta:
