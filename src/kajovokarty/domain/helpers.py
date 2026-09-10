@@ -17,6 +17,22 @@ from kajovokarty.domain.core import (
 REFERENCE_VERSION = "BOOKING-NOTE-1"
 
 
+def api_reservation_source(value):
+    """Normalize BetterHotel source and reservation_source aliases."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        value = dict(value)
+        if "uuid" in value and "id" not in value:
+            value["id"] = value.pop("uuid")
+        if value.get("id") is not None:
+            value["id"] = api_id(value["id"])
+        if value.get("name") is not None:
+            value["name"] = text(value["name"])
+        return value
+    return {"name": text(value)}
+
+
 def api_money(value):
     """Normalize BetterHotel helper amounts to cents.
 
@@ -214,6 +230,8 @@ def normalize_entity(kind, raw, currencies, parent_currency=None):
         if k == "currency" and value is not None:
             value = identifier(value)
             value = currencies.get(value, value.upper()) if value else None
+        if k == "reservation_source":
+            value = api_reservation_source(value)
         if (
             k in ("total", "subtotal", "deposit", "amount", "balance", "signed_amount")
             and value is not None
@@ -274,6 +292,9 @@ def normalize_entity(kind, raw, currencies, parent_currency=None):
             value = sorted(
                 value, key=lambda x: (identifier(x.get("id")) or "", digest(x))
             )
+        if k == "reservation_source" and k in result:
+            result[k] = merge(result[k], value)
+            continue
         if k in result:
             require(
                 result[k] == value,

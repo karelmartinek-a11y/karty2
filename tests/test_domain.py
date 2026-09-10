@@ -73,6 +73,15 @@ def test_dst():
     assert p == "AMBIGUOUS_LOCAL" and u is None and len(c) == 2
 
 
+def test_reservation_source_aliases_are_normalized_and_merged():
+    value = normalize_entity(
+        "reservation",
+        {"id": "R1", "source": {"id": 7}, "reservation_source": {"uuid": "7", "name": "Booking.com"}},
+        {},
+    )
+    assert value["reservation_source"] == {"id": "7", "name": "Booking.com"}
+
+
 def test_identifiers():
     assert (
         identifier("001859") == "001859"
