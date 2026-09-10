@@ -4,6 +4,11 @@ setlocal EnableExtensions
 rem Spousti KajovoKarty z adresare, ve kterem tento soubor lezi.
 cd /d "%~dp0"
 
+rem Pip pouziva docasne soubory; ukladej je na disk s volnym mistem.
+set "TMP=%~dp0.tmp"
+set "TEMP=%~dp0.tmp"
+if not exist "%TMP%" mkdir "%TMP%"
+
 set "VENV_DIR=%~dp0.venv"
 set "VENV_PYTHON=%VENV_DIR%\Scripts\python.exe"
 
