@@ -1,6 +1,6 @@
 from PySide6.QtCore import QAbstractTableModel, Qt, QModelIndex
 from PySide6.QtGui import QColor
-from kajovokarty.domain.core import display_money, canonical
+from kajovokarty.domain.columns import display_value, filter_rows, filter_options
 
 WORK_COLUMNS = [
     ("resolved", "Stav"),
@@ -22,14 +22,48 @@ class TableModel(QAbstractTableModel):
     def __init__(self, rows=None, columns=None):
         super().__init__()
         self.rows = rows or []
+        self.source_rows = list(self.rows)
+        self.column_filters = {}
+        self.sort_order = []
+        self.remote = False
         self.columns = columns or []
 
     def replace(self, rows, columns=None):
         self.beginResetModel()
-        self.rows = rows
+        self.source_rows = list(rows)
+        self.rows = (
+            list(rows)
+            if self.remote
+            else filter_rows(rows, self.column_filters, self.sort_order)
+        )
         if columns is not None:
             self.columns = columns
         self.endResetModel()
+
+    def set_column_filter(self, field, selected):
+        if field is None:
+            self.column_filters.clear()
+        elif selected is None:
+            self.column_filters.pop(field, None)
+        else:
+            self.column_filters[field] = list(selected)
+        self.replace(self.source_rows)
+
+    def set_sort(self, sort):
+        self.sort_order = list(sort)
+        self.replace(self.source_rows)
+
+    def filter_options(self, field):
+        return filter_options(self.source_rows, field, self.column_filters)
+
+    def flags(self, index):
+        flags = super().flags(index)
+        if index.isValid() and self.rows[index.row()].get("type") in (
+            "SOURCE",
+            "GROUP",
+        ):
+            return flags | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled
+        return flags
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self.rows)
@@ -43,26 +77,7 @@ class TableModel(QAbstractTableModel):
         key = self.columns[index.column()][0]
         v = self.rows[index.row()].get(key)
         if role in (Qt.DisplayRole, Qt.ToolTipRole):
-            if key == "resolved" and v is None:
-                return "Pomocné / historie"
-            if key == "resolved":
-                return "Vyřízeno" if v else "Nevyřízeno"
-            if key == "type" and v in ("SOURCE", "GROUP"):
-                return "Položka" if v == "SOURCE" else "Skupina"
-            if key in ("amount", "difference", "pair_difference") and v is not None:
-                return display_money(v)
-            if key == "kinds":
-                return " + ".join(
-                    {
-                        "CASHBOOK_CARD": "Pokladna",
-                        "BANK_CARD": "Terminál",
-                        "BOOKING": "Booking",
-                    }[k]
-                    for k in v
-                )
-            if isinstance(v, (dict, list)):
-                return canonical(v)
-            return "" if v is None else str(v)
+            return display_value(key, v)
         if role == Qt.TextAlignmentRole and key in (
             "amount",
             "difference",
@@ -80,8 +95,12 @@ class TableModel(QAbstractTableModel):
             from datetime import date
 
             value = self.rows[index.row()].get("date")
-            if value and (date.today() - date.fromisoformat(value[:10])).days > getattr(
-                self, "warning_age_days", 30
+            if (
+                isinstance(value, str)
+                and len(value) >= 10
+                and value[:4].isdigit()
+                and (date.today() - date.fromisoformat(value[:10])).days
+                > getattr(self, "warning_age_days", 30)
             ):
                 return QColor("#fff7e6")
         if role == Qt.UserRole:

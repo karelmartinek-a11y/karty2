@@ -541,8 +541,14 @@ class WorkService:
                 )
                 if s and s["group"]:
                     c.execute(
-                        "UPDATE reconciliation_group SET note=?,updated_at=? WHERE object_id=?",
-                        (s["group"]["note"], now(), i),
+                        "UPDATE reconciliation_group SET note=?,method=?,evidence_json=?,updated_at=? WHERE object_id=?",
+                        (
+                            s["group"]["note"],
+                            s["group"]["method"],
+                            s["group"]["evidence_json"],
+                            now(),
+                            i,
+                        ),
                     )
             for i, s in target.items():
                 if s and s["group"]:

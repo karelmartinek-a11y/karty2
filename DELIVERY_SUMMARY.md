@@ -1,3 +1,5 @@
+> Historický protokol verze 0.2.0. Aktuální změny a nové ověření 0.3.0: [docs/UI_WORKFLOW.md](docs/UI_WORKFLOW.md).
+
 # Dodávka KájovoKarty 0.2.0
 
 Vstup: KajovoKarty_repozitar_0.1.0(1).zip. Závazné zadání: nezměněný docs/SSOT.md. Výstup je celý repozitář, nikoli patch. Verze zdrojů a instalačního předpisu je 0.2.0; schéma databáze 2.

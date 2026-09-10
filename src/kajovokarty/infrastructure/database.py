@@ -84,7 +84,7 @@ class Database:
                     c.executescript("BEGIN IMMEDIATE;\n" + sql)
                     c.execute(
                         "INSERT INTO schema_migration VALUES(2,?,?,?)",
-                        (now(), "0.2.0", bytehash(sql.encode())),
+                        (now(), "0.3.0", bytehash(sql.encode())),
                     )
                     c.execute("PRAGMA user_version=2")
                     c.commit()
@@ -118,7 +118,7 @@ class Database:
             raw = candidate.read_bytes()
             manifest = {
                 "schema": 1,
-                "app_build": "0.2.0",
+                "app_build": "0.3.0",
                 "created_at": now(),
                 "files": {"database.sqlite": bytehash(raw)},
                 "secrets_included": False,

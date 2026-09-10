@@ -85,7 +85,15 @@ class ReportService:
 
     def build(self, report_id, ids=None, filters=None, sort=None):
         filters = dict(filters or {})
-        effective_filters = {} if ids is not None else filters
+        effective_filters = {} if ids is not None else dict(filters)
+        if report_id not in (
+            "unresolved",
+            "resolved",
+            "cashbook_cards",
+            "terminal",
+            "booking",
+        ):
+            effective_filters.pop("column_filters", None)
         require(report_id in REPORTS, "EXPORT_INVALID", "Neznámý typ sestavy.")
         data = {k: [] for k in ["metadata", *REPORTS[report_id]]}
         with self.db.gate, self.db.connect() as c:
@@ -453,6 +461,22 @@ class ReportService:
                     )
                 ]
             if report_id == "import_errors":
+                import_files = import_runs = None
+                if ids is None and filters.get("import_columns"):
+                    from kajovokarty.domain.columns import filter_rows
+
+                    imports = [
+                        dict(r)
+                        for r in c.execute(
+                            "SELECT i.run_id,i.file_id,i.original_name,i.sheet_name,"
+                            "i.input_mode,i.authoritative_snapshot_hash AS sha256,"
+                            "o.started_at,o.state,i.counters_json FROM import_file i "
+                            "JOIN operation o ON o.id=i.run_id"
+                        )
+                    ]
+                    matching = filter_rows(imports, filters["import_columns"])
+                    import_files = {r["file_id"] for r in matching}
+                    import_runs = {r["run_id"] for r in matching}
                 data["import_diagnostics"] = [
                     {
                         **dict(r),
@@ -468,6 +492,12 @@ class ReportService:
                         "SELECT d.*,f.sha256,f.original_name FROM import_diagnostic d LEFT JOIN source_file f ON f.id=d.file_id ORDER BY d.created_at,d.id"
                     )
                     if (ids is None or r["run_id"] in ids)
+                    and (
+                        import_files is None
+                        or r["file_id"] in import_files
+                        or r["file_id"] is None
+                        and r["run_id"] in import_runs
+                    )
                     and r["severity"] in filters.get("severity", ["ERROR", "WARNING"])
                     and (
                         ids is not None or event_matches(dict(r), filters, "created_at")
@@ -540,7 +570,7 @@ class ReportService:
             metadata = {
                 "report_schema_id": "KAJOVOKARTY-EXPORT-1",
                 "report_id": report_id,
-                "app_build": "0.2.0",
+                "app_build": "0.3.0",
                 "exported_at": now(),
                 "database_snapshot_id": uid(),
                 "selection_mode": "SINGLE_OBJECT"
@@ -632,6 +662,10 @@ def selected_graphs(data, groups, ids):
 
 
 def event_matches(row, filters, date_field):
+    from kajovokarty.domain.columns import matches
+
+    if not matches(row, filters.get("column_filters", {})):
+        return False
     stamp = row[date_field][:10]
     if filters.get("date_from") and stamp < filters["date_from"]:
         return False

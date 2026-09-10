@@ -38,6 +38,12 @@ class ActionRegistry:
             s.handler(*args, **kwargs)
 
     def refresh(self):
+        from shiboken6 import isValid
+
+        if not isValid(self.parent) or (
+            hasattr(self.parent, "table") and not isValid(self.parent.table)
+        ):
+            return
         for id, s in self.specs.items():
             self.actions[id].setEnabled(s.predicate())
             self.actions[id].setToolTip(s.label if s.predicate() else s.disabled_reason)

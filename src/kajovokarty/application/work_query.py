@@ -1,7 +1,8 @@
 """Bound, paged SQLite read projection. Financial commands never trust this view."""
 
 import json
-from kajovokarty.domain.core import checked, search_tokens, search_normalize
+from kajovokarty.domain.core import checked, search_tokens, search_normalize, require
+from kajovokarty.domain.columns import sql_token, display_value, sort_value
 
 FIELDS = (
     "invoice_code",
@@ -112,7 +113,6 @@ def query(c, filters, sort, page, page_size):
             "((instr(p.id,?)>0 OR (p.type='GROUP' AND instr(normalize(p.note),?)>0)) OR EXISTS(SELECT 1 FROM json_each(p.leaves) leaf JOIN source_search s ON s.source_id=leaf.value WHERE instr(s.local_search_text,?)>0))"
         )
         params.extend((token, token, token))
-    where = " WHERE " + " AND ".join(clauses) if clauses else ""
     allowed = {
         "id",
         "type",
@@ -131,9 +131,55 @@ def query(c, filters, sort, page, page_size):
         "method",
         "kinds",
     }
+    columns = f.get("column_filters", {})
+    require(
+        isinstance(columns, dict) and all(k in allowed for k in columns),
+        "FILTER_INVALID",
+        "Neznámý sloupec filtru.",
+    )
+    c.create_function("column_token", 2, sql_token, deterministic=True)
+    facet = f.get("_facet")
+    for key, values in columns.items():
+        require(
+            isinstance(values, list) and all(isinstance(v, str) for v in values),
+            "FILTER_INVALID",
+            "Neplatné hodnoty filtru.",
+        )
+        if key == facet:
+            continue
+        clauses.append(
+            "column_token('"
+            + key
+            + "',p."
+            + key
+            + ") IN (SELECT value FROM json_each(?))"
+        )
+        params.append(json.dumps(values))
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    if facet is not None:
+        require(facet in allowed, "FILTER_INVALID", "Neznámý sloupec.")
+        values = [
+            r[0]
+            for r in c.execute(
+                "SELECT DISTINCT column_token('"
+                + facet
+                + "',p."
+                + facet
+                + ") FROM work_projection p"
+                + where,
+                params,
+            )
+        ]
+        return {
+            "facets": [
+                (display_value(facet, json.loads(t)) or "(Prázdné)", t)
+                for t in sorted(values, key=lambda t: sort_value(json.loads(t)))
+            ]
+        }
     order = []
     for field, direction in sort or []:
         if field in allowed:
+            order.append("(" + field + " IS NULL OR " + field + "='') ASC")
             order.append(field + (" DESC" if direction == "desc" else " ASC"))
     order.append("id ASC")
     ordered = " ORDER BY " + ",".join(order)
@@ -144,6 +190,7 @@ def query(c, filters, sort, page, page_size):
     sql = "SELECT * FROM work_projection p" + where + ordered
     args = list(params)
     if page_size:
+        page = min(page, max(0, (len(ids) - 1) // page_size))
         sql += " LIMIT ? OFFSET ?"
         args.extend((page_size, page * page_size))
     rows = []
@@ -188,6 +235,7 @@ def query(c, filters, sort, page, page_size):
     ]
     return {
         "rows": rows,
+        "page": page,
         "ids": ids,
         "total": len(ids),
         "kpi": kpi,

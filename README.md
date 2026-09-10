@@ -2,7 +2,7 @@
 
 Česká desktopová aplikace Python 3.12 / PySide6 pro rekonsiliaci pokladních karet, terminálových transakcí a výplat Booking.com. Finanční data zůstávají v lokální SQLite databázi, BetterHotel se pouze čte přes GET.
 
-**Verze 0.2.0** rozšiřuje přiložený repozitář o migraci databáze, opravy helper důkazů a synchronizace, SQL stránkování, provozní nastavení, přesun a zotavení pracovního prostoru a rozsahy sestav. Přehled změn je v [DELIVERY_SUMMARY.md](DELIVERY_SUMMARY.md), skutečné výsledky a hranice ověření v [docs/VALIDATION.md](docs/VALIDATION.md).
+**Verze 0.3.0** přidává Párovací plochu s přetahováním plateb, přesunem a vyjmutím členů, atomickým Undo/Redo a přehledem rozdílu. Každý sloupec všech tabulek má řazení a filtr hodnot jako v Excelu. Návrh, ovládání a ověření: [docs/UI_WORKFLOW.md](docs/UI_WORKFLOW.md).
 
 Dodávka obsahuje zdrojový repozitář a předpis sestavení Windows instalátoru. Sestavený EXE není součástí ZIPu. Testování na čistém Windows profilu a s živým BetterHotel API dosud neproběhlo; úplná akceptace SSOT proto není prohlášena.
 
@@ -12,7 +12,7 @@ Dodávka obsahuje zdrojový repozitář a předpis sestavení Windows instaláto
 - `src/kajovokarty/application`: atomické importy, finanční skupiny, Undo/Redo, automatika, synchronizace a cílená obnova, reference, sestavy a zálohy.
 - `src/kajovokarty/infrastructure`: přísné XLS/CSV/XLSX parsery, SQLite a migrace, DPAPI, GET klient a exportní formáty.
 - `src/kajovokarty/ui`: skutečné české PySide6 rozhraní, tabulkové modely a background workery.
-- `docs/SSOT.md`: nezměněné původní zadání.
+- `docs/SSOT.md`: zadání s aktualizací ovládání 0.3.0 v oddílech 9.4 a 11.6.
 - `fixtures`: všech pět přesně rekonstruovaných souborů přílohy B.
 - `tests`: integrační, doménové, HTTP, vlastnostní a Qt testy.
 - `requirements.lock`, `requirements-dev.lock`: úplné verze závislostí s SHA-256 hashi.
@@ -56,7 +56,7 @@ Aplikace nepoužívá `.env`, aplikační účty ani povinné CLI argumenty. Vý
 2. Nastavení → uložit Access Token a Client Token → Načíst BetterHotel.
 3. Výslovně spustit automatické párování, nebo doplňovat pracovní výběr.
 4. Vytvořit skupinu: nulový rozdíl znamená Vyřízeno, jiný rozdíl otevřenou skupinu. CZK a EUR nelze spojit.
-5. Pro rozšíření otevřené skupiny ji označit v tabulce a použít Přidat výběr do skupiny.
+5. Přetáhnout platbu na jinou platbu nebo skupinu. Párovací plocha ukáže členy a rozdíl; přetažením člena do zóny Rozpárovat jej vyjmete. Každý přesun vrátí Ctrl+Z.
 6. Detail obsahuje jedinečné listy, původní částky, JSON důkaz a audit. Rozložení zachovává podskupiny.
 7. Sestavy lze uložit jako CSV ZIP, XLSX nebo PDF. Nastavení obsahuje zálohu, obnovu, přesun datové složky a anonymní diagnostiku.
 
@@ -64,6 +64,8 @@ Původní testovací soubory obsahují údaje z uživatelem dodaného SSOT. Prod
 
 ## Přechod z 0.1.0
 
-Spusťte 0.2.0 nad existující datovou složkou. Před migrací ze schématu 1 vznikne ověřená záloha bez tokenů. Migrace 002 je atomická a zachová finanční zdroje i historii. Pomocný graf se označí STALE; před novým použitím v automatice proveďte úplné načtení BetterHotel. Při chybě umístění nebo databáze se otevře zotavení, prázdná náhradní databáze se tiše nevytváří.
+Spusťte 0.3.0 nad existující datovou složkou. Před migrací ze schématu 1 vznikne ověřená záloha bez tokenů. Migrace 002 je atomická a zachová finanční zdroje i historii. Pomocný graf se označí STALE; před novým použitím v automatice proveďte úplné načtení BetterHotel. Při chybě umístění nebo databáze se otevře zotavení, prázdná náhradní databáze se tiše nevytváří.
 
 Přesun se provádí přes Nastavení a restartuje aplikaci. Původní složka zůstává zachována. Záloha neobsahuje přihlašovací tajemství; na jiném počítači je nutné tokeny znovu zadat. Ruční editace SQLite ani bootstrap souboru není běžný pracovní postup.
+
+Verze 0.3.0 používá stejné databázové schéma 2 jako 0.2.0. Nové přesuny využívají existující příkazy, historii a audit; finanční zdroje se nepřepisují.
