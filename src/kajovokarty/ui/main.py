@@ -1369,7 +1369,15 @@ class MainWindow(QMainWindow):
             finally:
                 http.close()
 
-        self.run(execute, self.after_mutation)
+        from kajovokarty.ui.sync_progress import SyncProgressDialog
+        dialog = SyncProgressDialog(self, self.cancel_operation)
+        dialog.show()
+        self.run(
+            execute,
+            lambda result: (dialog.finish(), self.after_mutation(result)),
+            error_handler=lambda error: (dialog.finish(), self.show_error(error)),
+            progress_handler=dialog.update_progress,
+        )
 
     def start_sync(self, compatibility=False):
         if self.busy:
@@ -1402,12 +1410,18 @@ class MainWindow(QMainWindow):
                 finally:
                     http.close()
 
+            from kajovokarty.ui.sync_progress import SyncProgressDialog
+            dialog = SyncProgressDialog(self, self.cancel_operation)
+            dialog.show()
             self.run(
                 execute,
                 lambda r: (
+                    dialog.finish(),
                     self.status.setText("BetterHotel: graf publikován."),
                     self.refresh(),
                 ),
+                error_handler=lambda error: (dialog.finish(), self.show_error(error)),
+                progress_handler=dialog.update_progress,
             )
 
         self.run(lambda p: self.sync.scope(), confirm, False)
