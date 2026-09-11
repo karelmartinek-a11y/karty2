@@ -2,6 +2,7 @@
 
 import re, html, unicodedata
 from datetime import datetime, timezone
+from uuid import UUID
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from kajovokarty.domain.core import (
     AppError,
@@ -15,6 +16,28 @@ from kajovokarty.domain.core import (
 )
 
 REFERENCE_VERSION = "BOOKING-NOTE-1"
+INVOICE_ROW_VERSION = "INVOICE-ROW-1"
+
+
+def api_currency(value, currencies):
+    value = identifier(value)
+    if not value:
+        return None
+    resolved = currencies.get(value, value).upper()
+    return resolved if re.fullmatch(r"[A-Z]{3}", resolved) else None
+
+
+def invoice_rows(invoice_id, items, currencies, parent_currency):
+    """Parent-owned occurrences; API IDs may be reused for a Deposit row."""
+    occurrences = {}
+    for raw in ([items] if isinstance(items, dict) else items):
+        normalized = normalize_entity("invoice_item", raw, currencies, parent_currency)
+        fingerprint = digest(normalized)
+        occurrence = occurrences.get(fingerprint, 0)
+        occurrences[fingerprint] = occurrence + 1
+        row_id = digest([INVOICE_ROW_VERSION, invoice_id, normalized["id"],
+                         fingerprint, occurrence])
+        yield raw, row_id
 
 
 def api_reservation_source(value):
@@ -23,21 +46,39 @@ def api_reservation_source(value):
         return None
     if isinstance(value, dict):
         value = dict(value)
-        if "source_id" in value and "id" not in value and "uuid" not in value:
-            value["id"] = value.pop("source_id")
-        if "source_name" in value and "name" not in value:
-            value["name"] = value.pop("source_name")
-        if "uuid" in value and "id" not in value:
-            value["id"] = value.pop("uuid")
-        if value.get("id") is not None:
-            value["id"] = api_id(value["id"])
-        if value.get("name") is not None:
-            value["name"] = text(value["name"])
+        for canonical_key, aliases, normalize in (
+            ("id", ("id", "uuid", "source_id"), source_identity),
+            ("name", ("name", "source_name"), text),
+        ):
+            present = [key for key in aliases if key in value]
+            values = [normalize(value.pop(key)) for key in present]
+            known = [v for v in values if v is not None]
+            require(len(set(known)) <= 1, "API_SNAPSHOT_CONFLICT",
+                    "Konfliktní aliasy zdroje rezervace.",
+                    {"field": "reservation_source." + canonical_key, "values": known})
+            if known:
+                value[canonical_key] = known[0]
         return value
     value = text(value)
-    if value and re.fullmatch(r"[0-9]+", value):
-        return {"id": value}
+    if value is None:
+        return None
+    if re.fullmatch(r"[0-9]+", value):
+        return {"id": source_identity(value)}
+    try:
+        return {"id": str(UUID(value))}
+    except ValueError:
+        pass
     return {"name": value}
+
+
+def source_identity(value):
+    if value is None:
+        return None
+    result = api_id(value)
+    try:
+        return str(UUID(result))
+    except ValueError:
+        return result
 
 
 def api_money(value):
@@ -134,23 +175,23 @@ def reference_decision(ref, override=None, active=True):
     }
 
 
-def merge(a, b):
+def merge(a, b, _path=""):
     result = dict(a)
     for k, v in b.items():
         if k not in result:
             result[k] = v
-        elif result[k] is None:
+        elif k == 'reservation_source' and result[k] is None:
             result[k] = v
-        elif v is None:
+        elif k == 'reservation_source' and v is None:
             continue
         elif isinstance(result[k], dict) and isinstance(v, dict):
-            result[k] = merge(result[k], v)
+            result[k] = merge(result[k], v, _path + k + ".")
         else:
             require(
                 result[k] == v,
                 "API_SNAPSHOT_CONFLICT",
                 "Projekce stejné entity obsahují rozdílné hodnoty.",
-                {"field": k},
+                {"field": _path + k},
             )
     return result
 
@@ -210,6 +251,11 @@ def normalize_entity(kind, raw, currencies, parent_currency=None):
         aliases.update(total="amount")
     result = {}
     raw = dict(raw)
+    # A detail may carry a valid id and an empty legacy uuid alias.
+    if text(raw.get('id')) and not text(raw.get('uuid')):
+        raw.pop('uuid', None)
+    elif text(raw.get('uuid')) and not text(raw.get('id')):
+        raw.pop('id', None)
     if kind == "invoice" and "payed" in raw:
         if "paid" not in raw:
             raw["paid"] = raw["payed"]
@@ -234,19 +280,33 @@ def normalize_entity(kind, raw, currencies, parent_currency=None):
             and value is not None
         ):
             value = api_id(value)
-        if k == "currency" and value is not None:
-            value = identifier(value)
-            value = currencies.get(value, value.upper()) if value else None
+        if k == "currency":
+            reference = identifier(value)
+            value = api_currency(value, currencies)
+            if value is None:
+                if reference:
+                    result["currency_reference"] = reference
+                continue
+        if k in ("note", "label"):
+            # Optional descriptive text: null, empty and whitespace are equivalent.
+            value = text(value)
+            if value is None:
+                continue
         if k == "reservation_source":
             value = api_reservation_source(value)
         if (
             k in ("total", "subtotal", "deposit", "amount", "balance", "signed_amount")
             and value is not None
+            # This endpoint also returns a reservation-level deposit breakdown.
+            and not (kind == "security_deposit" and k == "deposit"
+                     and isinstance(value, (list, dict)))
         ):
             value = api_money(value)
         if (
             k in ("date", "due_date", "vat_date", "archived", "paid", "payed")
             and value is not None
+            # Bill items expose an archive flag, unlike invoice timestamps.
+            and not (kind == "bill_item" and k == "archived" and type(value) is bool)
         ):
             value = api_timestamp(value)
         if (
@@ -271,7 +331,7 @@ def normalize_entity(kind, raw, currencies, parent_currency=None):
                 if norm in ("false", "0", "no", "ne", "open", "unlocked")
                 else None
             )
-        if k == "items":
+        if kind == "invoice" and k == "items":
             require(
                 isinstance(value, (list, dict)),
                 "API_SCHEMA",
@@ -282,10 +342,9 @@ def normalize_entity(kind, raw, currencies, parent_currency=None):
                     "invoice_item",
                     item,
                     currencies,
-                    currencies.get(
-                        identifier(raw.get("currency")), identifier(raw.get("currency"))
-                    )
-                    or parent_currency,
+                    # Inherited currency belongs to the extracted child entity,
+                    # not the parent's raw item projection (which may be sparse).
+                    None,
                 )
                 for item in (value if isinstance(value, list) else [value])
             ]
@@ -300,7 +359,12 @@ def normalize_entity(kind, raw, currencies, parent_currency=None):
                 value, key=lambda x: (identifier(x.get("id")) or "", digest(x))
             )
         if k == "reservation_source" and k in result:
-            result[k] = merge(result[k], value)
+            try:
+                result[k] = merge(result[k] or {}, value or {}) or None
+            except AppError as error:
+                error.details = {"field": "reservation_source." + error.details.get("field", "unknown"),
+                                 "left": result[k], "right": value}
+                raise
             continue
         if k in result:
             require(

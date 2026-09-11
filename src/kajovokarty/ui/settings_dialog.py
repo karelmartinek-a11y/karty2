@@ -1,4 +1,4 @@
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, QDate
 from PySide6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QWidget,
     QLineEdit,
+    QDateEdit,
     QCheckBox,
     QComboBox,
     QSpinBox,
@@ -33,7 +34,7 @@ class SecretEdit(QLineEdit):
 
 
 LABELS = {
-    "sync.start_date": "Začátek historie (volitelné datum)",
+    "sync.start_date": "Načítat pomocná data od",
     "sync.block_days": "Dní v synchronizačním bloku",
     "sync.timeout_seconds": "Síťový timeout (sekundy)",
     "sync.retry_count": "Počet opakování síťové chyby",
@@ -122,7 +123,12 @@ def settings_dialog(window):
     for key, value in values.items():
         if key not in LABELS:
             continue
-        if key in RANGES:
+        if key == "sync.start_date":
+            w = QDateEdit(QDate.fromString(value, "yyyy-MM-dd"))
+            w.setCalendarPopup(True)
+            w.setDisplayFormat("d. M. yyyy")
+            w.setMaximumDate(QDate.currentDate())
+        elif key in RANGES:
             w = QSpinBox()
             w.setRange(*RANGES[key])
             w.setValue(value)
@@ -161,10 +167,20 @@ def settings_dialog(window):
             form.addRow(LABELS[key], row)
         else:
             form.addRow(LABELS[key], w)
+        if key == "sync.start_date":
+            hint = QLabel(
+                "Do dneška včetně. Zahrnou se pobyty, které do období alespoň částečně "
+                "zasahují. Změna se použije při příštím úplném načtení. "
+                "API může vrátit širší seznam; rezervace mimo období se dále nezpracují."
+            )
+            hint.setWordWrap(True)
+            form.addRow(hint)
 
     def current_values():
         return {
-            k: w.value()
+            k: w.date().toString("yyyy-MM-dd")
+            if isinstance(w, QDateEdit)
+            else w.value()
             if isinstance(w, QSpinBox)
             else w.isChecked()
             if isinstance(w, QCheckBox)
@@ -250,7 +266,7 @@ def settings_dialog(window):
 
     def reset():
         for k, w in widgets.items():
-            if k == "data.directory":
+            if k in ("data.directory", "sync.start_date"):
                 continue
             value = DEFAULTS[k]
             if isinstance(w, QSpinBox):

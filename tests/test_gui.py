@@ -85,7 +85,10 @@ def test_actual_widgets_import_select_group(db, fixtures):
 
 
 def test_settings_inline_validation_and_appearance(db):
-    from PySide6.QtWidgets import QLineEdit, QLabel
+    from PySide6.QtWidgets import QLineEdit, QLabel, QDateEdit
+    from PySide6.QtCore import QDate
+    from kajovokarty.infrastructure.database import Database
+    from kajovokarty.application.settings import SettingsService
 
     app = QApplication.instance() or QApplication([])
     window = MainWindow(db)
@@ -113,6 +116,12 @@ def test_settings_inline_validation_and_appearance(db):
         )
         buttons = dialog.findChild(QDialogButtonBox)
         if stage[0] == 0 and not window.busy:
+            date_edit = dialog.findChild(QDateEdit)
+            assert date_edit.accessibleName() == "Načítat pomocná data od"
+            assert date_edit.calendarPopup()
+            assert date_edit.date() == QDate(2026, 1, 1)
+            assert date_edit.maximumDate() == QDate.currentDate()
+            date_edit.setDate(QDate(2026, 2, 3))
             edit.setText("neplatné")
             stage[0] = 1
             buttons.button(QDialogButtonBox.Save).click()
@@ -133,6 +142,7 @@ def test_settings_inline_validation_and_appearance(db):
     timer.stop()
     spin(lambda: not window.jobs)
     assert stage[0] == 2 and window.settings.get()["sync.requests_per_second"] == "0.8"
+    assert SettingsService(Database(db.path)).get()["sync.start_date"] == "2026-02-03"
     window.view_timer.stop()
     window.close()
     app.processEvents()

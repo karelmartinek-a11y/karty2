@@ -1,4 +1,4 @@
-import copy
+import copy, json
 import httpx, pytest
 from kajovokarty.application.settings import SettingsService
 from kajovokarty.application.sync import SyncService
@@ -216,7 +216,8 @@ def test_stale_detail_is_preview(db, wire):
     http.close()
 
 
-def test_resume_completed_block(db, wire):
+@pytest.mark.parametrize("restart_reason", [None, "old_contract", "changed_setting"])
+def test_resume_completed_block(db, wire, restart_reason):
     settings = SettingsService(db)
     settings.save({"sync.block_days": 1})
     sync = SyncService(db, settings)
@@ -241,6 +242,15 @@ def test_resume_completed_block(db, wire):
     with db.connect() as c:
         op = c.execute("SELECT id FROM operation WHERE type='SYNC'").fetchone()[0]
     http.close()
+    if restart_reason == "old_contract":
+        with db.transaction() as c:
+            checkpoint = json.loads(c.execute("SELECT recovery_json FROM operation WHERE id=?", (op,)).fetchone()[0])
+            checkpoint.pop("selection_contract")
+            c.execute("UPDATE operation SET recovery_json=? WHERE id=?", (json.dumps(checkpoint), op))
+    elif restart_reason == "changed_setting":
+        settings.save({"sync.start_date": "2026-02-01"})
+    # Keep this transport contract test to two days, including restarted runs.
+    sync.scope = lambda: ("2026-09-07", "2026-09-08")
     seen = []
 
     def success(request):
@@ -252,6 +262,6 @@ def test_resume_completed_block(db, wire):
     http.wait = lambda s: None
     sync.resume(http, op)
     assert sync.state()["status"] == "READY"
-    assert all(params.get("filter[date_from]") != "2026-09-07" for path, params in seen)
-    assert not any(path == "/currency" for path, params in seen)
+    assert any(params.get("filter[date_from]") == "2026-09-07" for path, params in seen) == bool(restart_reason)
+    assert any(path == "/currency" for path, params in seen) == bool(restart_reason)
     http.close()

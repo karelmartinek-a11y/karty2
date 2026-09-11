@@ -20,6 +20,9 @@ class TechnicalLog:
                 "elapsed_ms",
                 "correlation_id",
                 "error_code",
+                "diagnostic_id",
+                "resource_type",
+                "changed_fields",
             )
             if k in event
         }

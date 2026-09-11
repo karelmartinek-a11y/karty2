@@ -111,6 +111,7 @@ class BetterHotelClient:
         self.cancel = cancel
         self.progress = progress
         self.stats = {}
+        self.api_calls = 0
         self.last_request = 0
         proxy_url = self.settings.get("network.proxy_url")
         proxy = httpx.Proxy(proxy_url, auth=proxy_auth) if proxy_url else None
@@ -189,6 +190,8 @@ class BetterHotelClient:
             self.check_cancel()
             started = time.monotonic()
             try:
+                self.api_calls += 1
+                self.report({"type": "api_call", "calls": self.api_calls})
                 query = "&".join(f"{key}={value}" for key, value in (params or []))
                 self.report(
                     f"API → GET {url.split('/api/', 1)[-1]}"
@@ -302,6 +305,17 @@ class BetterHotelClient:
         seen = set()
         cursor = None
         result = []
+        expected = None
+        invalid_total = False
+        top_level = template in ("/invoice", "/reservation", "/currency")
+        def report_collection():
+            if top_level:
+                self.report({"type": "sync_progress", "phase": "list:" + template,
+                             "completed": len(result), "total": expected if not invalid_total else None,
+                             "unit": "záznamů seznamu", "message": "Načítám " + {
+                                 "/invoice": "seznam faktur", "/reservation": "seznam rezervací",
+                                 "/currency": "číselník měn"}[template]})
+        report_collection()
         while True:
             query = list(base)
             if template in ("/invoice", "/reservation") or cursor:
@@ -339,6 +353,16 @@ class BetterHotelClient:
                 )
             more = meta.get("has_more", False)
             require(type(more) is bool, "API_SCHEMA", "has_more musí být boolean.")
+            total = meta.get("total_count")
+            if total is not None:
+                if expected is not None and total != expected:
+                    invalid_total = True
+                expected = total
+            if expected is not None and (len(result) > expected or (more and len(result) >= expected)):
+                invalid_total = True
+            if not more and expected is not None and len(result) != expected:
+                invalid_total = True
+            report_collection()
             if not more:
                 self.report(f"Dokončeno {template}: celkem {len(result)} položek")
                 return result

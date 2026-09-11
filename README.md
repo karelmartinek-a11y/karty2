@@ -6,7 +6,7 @@
 
 Verze 0.3.1 opravuje automatické párování: pouze výslovné tlačítko, kontrola platnosti důkazů při každém zápisu, bezpečné zrušení, trvalý výsledek po měnách a zachování starších zákazů spojení. Forenzní nálezy a testy: [docs/AUTO_AUDIT.md](docs/AUTO_AUDIT.md). Přetahování plateb a Excelové sloupcové filtry z 0.3.0 zůstávají popsané v [docs/UI_WORKFLOW.md](docs/UI_WORKFLOW.md).
 
-Dodávka obsahuje zdrojový repozitář a předpis sestavení Windows instalátoru. Sestavený EXE není součástí ZIPu. Testování na čistém Windows profilu a s živým BetterHotel API dosud neproběhlo; úplná akceptace SSOT proto není prohlášena.
+Dodávka obsahuje zdrojový repozitář a předpis sestavení Windows instalátoru. Sestavený EXE není součástí ZIPu. Zjištění z živého BetterHotel API, opravy importu a stav jejich ověření popisuje [protokol z 11. 9. 2026](docs/betterhotel-import-fix-2026-09-11.md). Testování na čistém Windows profilu dosud neproběhlo; úplná akceptace SSOT není prohlášena.
 
 ## Obsah
 

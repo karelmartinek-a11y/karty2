@@ -17,10 +17,25 @@ from kajovokarty.domain.helpers import (
     extract_references,
     merge,
     normalize_entity,
+    invoice_rows,
 )
 from kajovokarty.infrastructure.betterhotel import TEMPLATES, request_shape
 from kajovokarty.application.generations import graph_hash
 from kajovokarty.application.snapshots import save_snapshot, observe, relation_record
+from kajovokarty.infrastructure.conflicts import record_conflict
+
+SELECTION_CONTRACT = "STAY-OVERLAP-6-INVOICE-ROW-1"
+
+
+def reservation_overlaps(payload, start, end):
+    arrival, departure = payload.get("arrival"), payload.get("departure")
+    require(
+        arrival and departure and arrival <= departure,
+        "API_SCHEMA",
+        "Rezervace nemá platné datum příjezdu a odjezdu; nelze určit rozsah pobytu.",
+        {"reservation_id": payload.get("id")},
+    )
+    return arrival <= end and departure >= start
 
 
 class SyncService:
@@ -37,31 +52,21 @@ class SyncService:
             return dict(c.execute("SELECT * FROM helper_state").fetchone())
 
     def scope(self):
-        today = date.today()
-        starts = [today - timedelta(days=365)]
-        ends = [today]
-        with self.db.connect() as c:
-            for r in c.execute(
-                "SELECT local_date,canonical_json FROM financial_source"
-            ):
-                starts.append(date.fromisoformat(r["local_date"]))
-                ends.append(date.fromisoformat(r["local_date"]))
-                p = json.loads(r["canonical_json"])
-                if p.get("arrival"):
-                    starts.append(date.fromisoformat(p["arrival"]))
-                if p.get("departure"):
-                    ends.append(date.fromisoformat(p["departure"]))
-            st = self.state()
-            for r in c.execute(
-                "SELECT range_start,range_end FROM sync_coverage WHERE context_id=? AND generation_id=?",
-                (st["context_id"], st["published_generation_id"]),
-            ):
-                starts.append(date.fromisoformat(r[0]))
-                ends.append(date.fromisoformat(r[1]))
-        custom = self.settings.get().get("sync.start_date")
-        if custom:
-            starts.append(date.fromisoformat(custom))
-        return min(starts).isoformat(), max(ends).isoformat()
+        start = self.settings.get()["sync.start_date"]
+        end = date.today().isoformat()
+        try:
+            valid = (
+                bool(start)
+                and date.fromisoformat(start).isoformat() == start
+                and start <= end
+            )
+        except (TypeError, ValueError):
+            valid = False
+        require(
+            valid, "SETTING_INVALID",
+            "V Nastavení zadejte datum načítání nejvýše do dneška.",
+        )
+        return start, end
 
     def full(self, client, compatibility=False, progress=None, scope=None):
         with self.db.operation_gate(client.cancel, progress):
@@ -95,6 +100,7 @@ class SyncService:
                 and checkpoint.get("credential_revision") == st["credential_revision"]
                 and checkpoint.get("predecessor_id") == st["published_generation_id"]
                 and checkpoint.get("parser_contract") == "BH-CONNECTOR-1"
+                and checkpoint.get("selection_contract") == SELECTION_CONTRACT
                 and checkpoint.get("settings") == settings
             )
             if not valid:
@@ -116,6 +122,7 @@ class SyncService:
             roots = {tuple(k) for k in checkpoint["roots"]}
             cache = {tuple(k): v for k, v in checkpoint["cache"]}
             client.stats = checkpoint["client_stats"]
+            client.api_calls = sum(len(s.get("status_codes", [])) for s in client.stats.values())
             edge_records = {
                 tuple(k): tuple(v) for k, v in checkpoint.get("edge_records", [])
             }
@@ -175,21 +182,38 @@ class SyncService:
                     (op, ctx, st["credential_revision"], start, end, now()),
                 )
 
-        def add(kind, raw, projection, template, root=False, parent_currency=None):
-            client.last_template = template
+        def normalized_payload(kind, raw, parent_currency=None):
             normalized = normalize_entity(kind, raw, currencies, parent_currency)
+            if kind == "reservation":
+                # A sparse list projection may leave dates null; the detail supplies them.
+                normalized = {
+                    k: v for k, v in normalized.items()
+                    if k not in ("arrival", "departure") or v is not None
+                }
+            return normalized
+
+        def add(kind, raw, projection, template, root=False, parent_currency=None, row_id=None):
+            client.last_template = template
+            normalized = normalized_payload(kind, raw, parent_currency)
+            if row_id is not None:
+                normalized["source_item_id"] = normalized["id"]
+                normalized["id"] = row_id
             eid = normalized["id"]
             key = (kind, eid)
             shape = request_shape(template)
             rep = (kind, eid, projection, shape)
             if rep in representations:
-                require(
-                    representations[rep] == normalized,
-                    "API_SNAPSHOT_CONFLICT",
-                    "Opakovaná reprezentace změnila obsah.",
-                )
+                if representations[rep] != normalized:
+                    raise record_conflict(self.db, op, kind, eid, template,
+                                          representations[rep], normalized, client.logger)
             representations[rep] = normalized
-            entities[key] = merge(entities.get(key, {}), dict(normalized))
+            try:
+                entities[key] = merge(entities.get(key, {}), dict(normalized))
+            except AppError as error:
+                if error.code == "API_SNAPSHOT_CONFLICT":
+                    raise record_conflict(self.db, op, kind, eid, template,
+                                          entities[key], normalized, client.logger) from None
+                raise
             snapshots.append((kind, eid, projection, shape, template, raw))
             if root:
                 roots.add(key)
@@ -199,11 +223,15 @@ class SyncService:
             key = (ft, fi, relation, tt, ti)
             record = relation_record(key, template, raw)
             if key in edge_records:
-                require(
-                    edge_records[key][-1] == raw,
-                    "API_SNAPSHOT_CONFLICT",
-                    "Opakovaný vztah změnil obsah.",
-                )
+                previous_raw = edge_records[key][-1]
+                equivalent = previous_raw == raw
+                if not equivalent and (ft, relation, tt) == ("invoice", "ITEM", "invoice_item"):
+                    currency = entities[(ft, fi)].get("currency")
+                    equivalent = (normalize_entity(tt, previous_raw, currencies, currency)
+                                  == normalize_entity(tt, raw, currencies, currency))
+                if not equivalent:
+                    raise record_conflict(self.db, op, "relation_edge", digest(key), template,
+                                          previous_raw, raw, client.logger)
             edge_records[key] = record
             links.append(key)
             snapshots.append(record)
@@ -235,6 +263,8 @@ class SyncService:
 
         def invoice_items(eid):
             inv = entities[("invoice", eid)]
+            require(not inv.get("currency_reference") or inv.get("currency"),
+                    "API_SCHEMA", "Detail dokladu nerozpoznal měnu ze seznamu.")
             require(
                 inv.get("date"),
                 "API_SCHEMA",
@@ -260,13 +290,14 @@ class SyncService:
                 parent_raw.get("invoice_items", parent_raw.get("items", [])),
             )
             embedded = [embedded] if isinstance(embedded, dict) else embedded
-            for item in embedded:
+            for item, row_id in invoice_rows(eid, embedded, currencies, inv.get("currency")):
                 iid = add(
                     "invoice_item",
                     item,
                     "EMBEDDED_ENTITY",
                     origin[4],
                     parent_currency=inv.get("currency"),
+                    row_id=row_id,
                 )
                 edge(
                     "invoice",
@@ -276,6 +307,65 @@ class SyncService:
                     iid,
                     item,
                     origin[4],
+                )
+
+        def phase_progress(phase, completed, total, unit, message):
+            callback = progress or client.progress
+            if callback:
+                callback({"type": "sync_progress", "phase": phase, "completed": completed,
+                          "total": total, "unit": unit, "message": message})
+
+        def save_checkpoint(phase, b, block):
+            phase_progress("checkpoint", 0, None, "", "Ukládám průběžný stav načítání")
+            with self.db.transaction() as c:
+                guard(c)
+                flush(c, phase + ":" + b)
+                self.db.audit(
+                    c,
+                    "SYNC_BLOCK_COMPLETED",
+                    after={"generation_id": gen, "phase": phase, "end": b},
+                    operation=op,
+                )
+                c.execute(
+                    "UPDATE operation SET heartbeat_at=?,progress_current=?,recovery_json=? WHERE id=?",
+                    (
+                        now(),
+                        block,
+                        canonical(
+                            {
+                                "context_id": ctx,
+                                "credential_revision": st["credential_revision"],
+                                "generation_id": gen,
+                                "predecessor_id": st["published_generation_id"],
+                                "parser_contract": "BH-CONNECTOR-1",
+                                "selection_contract": SELECTION_CONTRACT,
+                                "scope": [start, end],
+                                "settings": settings,
+                                "evidence_class": client.evidence_class,
+                                "compatibility": compatibility,
+                                "completed_through": b,
+                                "phase": phase,
+                                "blocks": block,
+                                "entities": [
+                                    [list(k), v] for k, v in entities.items()
+                                ],
+                                "links": links,
+                                "snapshots": snapshots,
+                                "persisted": persisted,
+                                "edge_records": [
+                                    [list(k), v] for k, v in edge_records.items()
+                                ],
+                                "currencies": currencies,
+                                "representations": [
+                                    [list(k), v] for k, v in representations.items()
+                                ],
+                                "roots": [list(k) for k in roots],
+                                "cache": [[list(k), v] for k, v in cache.items()],
+                                "client_stats": client.stats,
+                            }
+                        ),
+                        op,
+                    ),
                 )
 
         published = False
@@ -311,10 +401,13 @@ class SyncService:
                 a, b = cursor.isoformat(), stop.isoformat()
                 if progress:
                     progress(f"BetterHotel: {a} až {b}")
-                for raw in client.collection(
+                invoice_list = client.collection(
                     "/invoice",
                     params=[("filter[date_from]", a), ("filter[date_to]", b)],
-                ):
+                )
+                phase_progress("invoices", 0, len(invoice_list), "dokladů bloku",
+                               f"Zpracovávám doklady {a} až {b}")
+                for invoice_index, raw in enumerate(invoice_list):
                     eid = add("invoice", raw, "LIST_ENTITY", "/invoice", True)
                     inv = entities[("invoice", eid)]
                     if compatibility or not all(
@@ -322,174 +415,173 @@ class SyncService:
                     ):
                         detail("invoice", eid, "/invoice/{invoice_id}", "invoice_id")
                     invoice_items(eid)
-                for raw in client.collection(
-                    "/reservation",
-                    params=[
-                        ("date_from", a),
-                        ("date_to", b),
-                        ("expand[]", "reservation_source"),
-                        ("expand[]", "reservation_note"),
-                    ],
-                ):
-                    rid = add("reservation", raw, "LIST_ENTITY", "/reservation", True)
-                    if ("reservation_relations", rid) in cache:
-                        continue
-                    detail(
-                        "reservation",
-                        rid,
-                        "/reservation/{reservation_id}",
-                        "reservation_id",
-                    )
-                    for rel in client.collection(
-                        "/reservation/{reservation_id}/invoice", {"reservation_id": rid}
-                    ):
-                        iid = api_id(rel.get("invoice_id", rel.get("id")))
-                        detail("invoice", iid, "/invoice/{invoice_id}", "invoice_id")
-                        invoice_items(iid)
-                        edge(
-                            "reservation",
-                            rid,
-                            "INVOICE",
-                            "invoice",
-                            iid,
-                            rel,
-                            "/reservation/{reservation_id}/invoice",
-                        )
-                    for rel in client.collection(
-                        "/reservation/{reservation_id}/bill", {"reservation_id": rid}
-                    ):
-                        bid = api_id(rel.get("bill_id", rel.get("id")))
-                        bill = detail("bill", bid, "/bill/{bill_id}", "bill_id")
-                        require(
-                            not bill.get("reservation_id")
-                            or bill["reservation_id"] == rid,
-                            "API_SCHEMA",
-                            "Účet odkazuje na jinou rezervaci.",
-                        )
-                        bill["reservation_id"] = rid
-                        edge(
-                            "reservation",
-                            rid,
-                            "BILL",
-                            "bill",
-                            bid,
-                            rel,
-                            "/reservation/{reservation_id}/bill",
-                        )
-                        for item in client.collection(
-                            "/bill/{bill_id}/bill-item", {"bill_id": bid}
-                        ):
-                            iid = api_id(item.get("bill_item_id", item.get("id")))
-                            itemdata = detail(
-                                "bill_item",
-                                iid,
-                                "/bill-item/{item_id}",
-                                "item_id",
-                                bill.get("currency"),
+                    phase_progress("invoices", invoice_index + 1, len(invoice_list), "dokladů bloku",
+                                   f"Zpracovávám doklady {a} až {b}")
+                save_checkpoint("INVOICES", b, block)
+                cursor = stop + timedelta(days=1)
+            list_key = ("reservation_list", "all")
+            if list_key not in cache:
+                cache[list_key] = client.collection(
+                    "/reservation", params=[("date_from", start), ("date_to", end),
+                    ("expand[]", "reservation_source"), ("expand[]", "reservation_note")],
+                )
+                save_checkpoint("SELECT", end, block)
+            selected_key = ("selected_reservations", "all")
+            if selected_key not in cache:
+                selected = []
+                rows = cache[list_key]
+                for index, raw in enumerate(rows):
+                    client.check_cancel()
+                    if index % 25 == 0:
+                        phase_progress("selection", index, len(rows), "rezervací", "Vybírám pobyty v nastaveném období")
+                    candidate = normalized_payload("reservation", raw)
+                    rid = candidate["id"]
+                    selection_detail = None
+                    if not candidate.get("arrival") or not candidate.get("departure"):
+                        selection_key = ("reservation_selection_detail", rid)
+                        if selection_key not in cache:
+                            received = client.detail(
+                                "/reservation/{reservation_id}", {"reservation_id": rid}
                             )
                             require(
-                                not itemdata.get("bill_id")
-                                or itemdata["bill_id"] == bid,
-                                "API_SCHEMA",
-                                "Položka patří jinému účtu.",
+                                api_id(received.get("id", received.get("uuid"))) == rid,
+                                "API_SCHEMA", "ID detailu neodpovídá URL.",
                             )
-                            itemdata["bill_id"] = bid
-                            edge(
-                                "bill",
-                                bid,
-                                "ITEM",
-                                "bill_item",
-                                iid,
-                                item,
-                                "/bill/{bill_id}/bill-item",
-                            )
-                    for dep in client.collection(
-                        "/reservation/{reservation_id}/security-deposit",
-                        {"reservation_id": rid},
+                            cache[selection_key] = received
+                        selection_detail = cache[selection_key]
+                        candidate = merge(
+                            candidate, normalized_payload("reservation", selection_detail)
+                        )
+                    if not reservation_overlaps(candidate, start, end):
+                        continue
+                    rid = add("reservation", raw, "LIST_ENTITY", "/reservation", True)
+                    if selection_detail is not None:
+                        add(
+                            "reservation", selection_detail, "DETAIL_ENTITY",
+                            "/reservation/{reservation_id}",
+                        )
+                        cache[("reservation", rid, "/reservation/{reservation_id}")] = True
+                    else:
+                        detail("reservation", rid, "/reservation/{reservation_id}", "reservation_id")
+                    reservation_overlaps(entities[("reservation", rid)], start, end)
+                    selected.append(rid)
+                cache[selected_key] = sorted(set(selected))
+                phase_progress("selection", len(rows), len(rows), "rezervací", "Výběr pobytů dokončen")
+                save_checkpoint("RESERVATIONS", end, block)
+            selected = cache[selected_key]
+            done = sum(("reservation_relations", rid) in cache for rid in selected)
+            phase_progress("reservations", done, len(selected), "vybraných rezervací", "Načítám doklady, účty a kauce rezervací")
+            for rid in selected:
+                client.check_cancel()
+                if ("reservation_relations", rid) in cache:
+                    continue
+                phase_progress("reservations", done, len(selected), "vybraných rezervací",
+                               "Načítám doklady, účty a kauce rezervací")
+                for rel in client.collection(
+                    "/reservation/{reservation_id}/invoice", {"reservation_id": rid}
+                ):
+                    iid = api_id(rel.get("invoice_id", rel.get("id")))
+                    detail("invoice", iid, "/invoice/{invoice_id}", "invoice_id")
+                    invoice_items(iid)
+                    edge(
+                        "reservation",
+                        rid,
+                        "INVOICE",
+                        "invoice",
+                        iid,
+                        rel,
+                        "/reservation/{reservation_id}/invoice",
+                    )
+                for rel in client.collection(
+                    "/reservation/{reservation_id}/bill", {"reservation_id": rid}
+                ):
+                    bid = api_id(rel.get("bill_id", rel.get("id")))
+                    bill = detail("bill", bid, "/bill/{bill_id}", "bill_id")
+                    require(
+                        not bill.get("reservation_id")
+                        or bill["reservation_id"] == rid,
+                        "API_SCHEMA",
+                        "Účet odkazuje na jinou rezervaci.",
+                    )
+                    bill["reservation_id"] = rid
+                    edge(
+                        "reservation",
+                        rid,
+                        "BILL",
+                        "bill",
+                        bid,
+                        rel,
+                        "/reservation/{reservation_id}/bill",
+                    )
+                    for item in client.collection(
+                        "/bill/{bill_id}/bill-item", {"bill_id": bid}
                     ):
-                        did = add(
-                            "security_deposit",
-                            dep,
-                            "LIST_ENTITY",
-                            "/reservation/{reservation_id}/security-deposit",
+                        iid = api_id(item.get("bill_item_id", item.get("id")))
+                        itemdata = detail(
+                            "bill_item",
+                            iid,
+                            "/bill-item/{item_id}",
+                            "item_id",
+                            bill.get("currency"),
                         )
-                        deposit = entities[("security_deposit", did)]
                         require(
-                            not deposit.get("reservation_id")
-                            or deposit["reservation_id"] == rid,
+                            not itemdata.get("bill_id")
+                            or itemdata["bill_id"] == bid,
                             "API_SCHEMA",
-                            "Kauce patří jiné rezervaci.",
+                            "Položka patří jinému účtu.",
                         )
-                        deposit["reservation_id"] = rid
+                        itemdata["bill_id"] = bid
                         edge(
-                            "reservation",
-                            rid,
-                            "DEPOSIT",
-                            "security_deposit",
-                            did,
-                            dep,
-                            "/reservation/{reservation_id}/security-deposit",
+                            "bill",
+                            bid,
+                            "ITEM",
+                            "bill_item",
+                            iid,
+                            item,
+                            "/bill/{bill_id}/bill-item",
                         )
-                    cache[("reservation_relations", rid)] = True
-                # Raw evidence is durable at every complete block; current pointer stays unchanged.
-                with self.db.transaction() as c:
-                    guard(c)
-                    flush(c, a + "/" + b)
-                    self.db.audit(
-                        c,
-                        "SYNC_BLOCK_COMPLETED",
-                        after={"generation_id": gen, "start": a, "end": b},
-                        operation=op,
+                for dep in client.collection(
+                    "/reservation/{reservation_id}/security-deposit",
+                    {"reservation_id": rid},
+                ):
+                    did = add(
+                        "security_deposit",
+                        dep,
+                        "LIST_ENTITY",
+                        "/reservation/{reservation_id}/security-deposit",
                     )
-                    c.execute(
-                        "UPDATE operation SET heartbeat_at=?,progress_current=?,recovery_json=? WHERE id=?",
-                        (
-                            now(),
-                            block,
-                            canonical(
-                                {
-                                    "context_id": ctx,
-                                    "credential_revision": st["credential_revision"],
-                                    "generation_id": gen,
-                                    "predecessor_id": st["published_generation_id"],
-                                    "parser_contract": "BH-CONNECTOR-1",
-                                    "scope": [start, end],
-                                    "settings": settings,
-                                    "evidence_class": client.evidence_class,
-                                    "compatibility": compatibility,
-                                    "completed_through": b,
-                                    "blocks": block,
-                                    "entities": [
-                                        [list(k), v] for k, v in entities.items()
-                                    ],
-                                    "links": links,
-                                    "snapshots": snapshots,
-                                    "persisted": persisted,
-                                    "edge_records": [
-                                        [list(k), v] for k, v in edge_records.items()
-                                    ],
-                                    "currencies": currencies,
-                                    "representations": [
-                                        [list(k), v] for k, v in representations.items()
-                                    ],
-                                    "roots": [list(k) for k in roots],
-                                    "cache": [[list(k), v] for k, v in cache.items()],
-                                    "client_stats": client.stats,
-                                }
-                            ),
-                            op,
-                        ),
+                    deposit = entities[("security_deposit", did)]
+                    require(
+                        not deposit.get("reservation_id")
+                        or deposit["reservation_id"] == rid,
+                        "API_SCHEMA",
+                        "Kauce patří jiné rezervaci.",
                     )
-                cursor = stop + timedelta(days=1)
+                    deposit["reservation_id"] = rid
+                    edge(
+                        "reservation",
+                        rid,
+                        "DEPOSIT",
+                        "security_deposit",
+                        did,
+                        dep,
+                        "/reservation/{reservation_id}/security-deposit",
+                    )
+                cache[("reservation_relations", rid)] = True
+                done += 1
+                phase_progress("reservations", done, len(selected), "vybraných rezervací", "Načítám doklady, účty a kauce rezervací")
+                if done % 25 == 0 or done == len(selected):
+                    save_checkpoint("RESERVATIONS", end, block)
+            phase_progress("saving", 0, None, "", "Ověřuji a ukládám pomocná data")
             client.check_cancel()
             for (kind, eid), payload in list(entities.items()):
                 if kind == "invoice_item" and payload.get("bill_item_id"):
                     target = ("bill_item", payload["bill_item_id"])
-                    require(
-                        target in entities,
-                        "API_SCHEMA",
-                        "Položka dokladu odkazuje na nedoloženou položku účtu.",
-                    )
+                    if target not in entities:
+                        # A dated invoice may refer to an account outside the stay filter.
+                        # Follow its explicit item reference without importing that reservation.
+                        detail("bill_item", target[1], "/bill-item/{item_id}", "item_id",
+                               payload.get("currency"))
                     edge(
                         kind,
                         eid,
@@ -499,6 +591,10 @@ class SyncService:
                         "/invoice/{invoice_id}",
                     )
             links = sorted(set(links))
+            link_keys = set(links)
+            shape_index = {}
+            for kind, eid, projection, shape in representations:
+                shape_index.setdefault((kind, eid), set()).add((projection, shape))
             snapshot_ids = {}
             with self.db.transaction() as c:
                 guard(c)
@@ -519,13 +615,7 @@ class SyncService:
                         )
                     }
                 for (kind, eid), payload in sorted(entities.items()):
-                    shapes = sorted(
-                        {
-                            (p, s)
-                            for k, i, p, s in representations
-                            if k == kind and i == eid
-                        }
-                    )
+                    shapes = sorted(shape_index.get((kind, eid), ()))
                     sid = snapshot(
                         kind,
                         eid,
@@ -634,7 +724,7 @@ class SyncService:
                                 "to_id",
                             )
                         )
-                        if key not in links:
+                        if key not in link_keys:
                             c.execute(
                                 "INSERT INTO helper_link VALUES(?,?,?,?,?,?,?,?,0,?,?)",
                                 (
@@ -678,8 +768,9 @@ class SyncService:
                     operation=op,
                 )
             published = True
+            phase_progress("statistics", 0, None, "", "Načítám závěrečné statistiky")
             stats = client.get(
-                "/financial-stats", params=[("date_from", start), ("date_to", end)]
+                "/financial-stats", params=[("from", start), ("to", end)]
             )
             with self.db.transaction() as c:
                 guard(c)
@@ -701,6 +792,7 @@ class SyncService:
                     ),
                 )
             self.db.finish_operation(op)
+            phase_progress("completed", 1, 1, "", "Načítání úspěšně dokončeno")
             return {
                 "operation_id": op,
                 "generation_id": gen,

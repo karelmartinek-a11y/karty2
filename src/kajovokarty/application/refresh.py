@@ -146,17 +146,19 @@ class RefreshService:
                 (op,),
             )
 
-        def put(k, raw, template, parent_currency=None, projection="DETAIL_ENTITY"):
+        def put(k, raw, template, parent_currency=None, projection="DETAIL_ENTITY", row_id=None):
             client.last_template = template
             p = normalize_entity(k, raw, currencies, parent_currency)
+            if row_id is not None:
+                p["source_item_id"] = p["id"]
+                p["id"] = row_id
             key = (k, p["id"])
             old = entities.get(key)
             if key in changed:
-                require(
-                    entities[key]["payload"] == p,
-                    "API_SNAPSHOT_CONFLICT",
-                    "Detail obsahuje konfliktní opakovanou entitu.",
-                )
+                if entities[key]["payload"] != p:
+                    from kajovokarty.infrastructure.conflicts import record_conflict
+                    raise record_conflict(self.db, op, k, p["id"], template,
+                                          entities[key]["payload"], p, client.logger)
             else:
                 entities[key] = {
                     **(old or {}),
@@ -189,11 +191,17 @@ class RefreshService:
         def edge(ft, fi, relation, tt, ti, raw, template):
             key = (ft, fi, relation, tt, ti)
             record = relation_record(key, template, raw)
-            require(
-                key not in edge_records or edge_records[key][-1] == raw,
-                "API_SNAPSHOT_CONFLICT",
-                "Vztah změnil obsah.",
-            )
+            if key in edge_records and edge_records[key][-1] != raw:
+                previous_raw = edge_records[key][-1]
+                equivalent = False
+                if (ft, relation, tt) == ("invoice", "ITEM", "invoice_item"):
+                    currency = entities[(ft, fi)]["payload"].get("currency")
+                    equivalent = (normalize_entity(tt, previous_raw, currencies, currency)
+                                  == normalize_entity(tt, raw, currencies, currency))
+                if not equivalent:
+                    from kajovokarty.infrastructure.conflicts import record_conflict
+                    raise record_conflict(self.db, op, "relation_edge", digest(key), template,
+                                          previous_raw, raw, client.logger)
             edge_records[key] = record
             raws.append(record)
             links.add(key)
@@ -233,13 +241,15 @@ class RefreshService:
                 parent_raw.get("invoice_items", parent_raw.get("items", [])),
             )
             embedded = [embedded] if isinstance(embedded, dict) else embedded
-            for item in embedded:
+            from kajovokarty.domain.helpers import invoice_rows
+            for item, row_id in invoice_rows(i, embedded, currencies, p.get("currency")):
                 q = put(
                     "invoice_item",
                     item,
                     "/invoice/{invoice_id}",
                     p["currency"],
                     "EMBEDDED_ENTITY",
+                    row_id=row_id,
                 )
                 edge(
                     "invoice",

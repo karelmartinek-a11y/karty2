@@ -211,9 +211,10 @@ def test_A9_moved_root_and_orphan_preserved(db, wire):
         path = r.url.path[len("/api/connector/v/1") :]
         if path == "/invoice":
             return httpx.Response(200, json={"data": []})
-        if path == "/reservation" and r.url.params["date_from"] == "2026-09-01":
+        if path == "/reservation" and not r.url.params.get("cursor"):
             assert sync.state()["published_generation_id"] == old
-            return httpx.Response(200, json={"data": []})
+            # The complete reservation list now spans pages, not invoice date blocks.
+            return httpx.Response(200, json={"data": [], "meta": {"has_more": True, "cursor": "moved"}})
         return httpx.Response(200, json=changed[path])
 
     http = BetterHotelClient("a", "b", transport=httpx.MockTransport(moved))

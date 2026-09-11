@@ -27,7 +27,10 @@ class SyncProgressDialog(QDialog):
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.cancel_callback = cancel
         self.stopping = self.finished = False
-        self.calls = self.items = self.expected = 0
+        self.calls = self.items = 0
+        self.expected = None
+        self.unit = ""
+        self.current_phase = "preparing"
         self.started = time.monotonic()
         layout = QVBoxLayout(self)
         self.phase = QLabel("Připravuji načítání…")
@@ -44,26 +47,38 @@ class SyncProgressDialog(QDialog):
         self.timer = QTimer(self); self.timer.timeout.connect(self.tick); self.timer.start(1000)
 
     def update_progress(self, event):
-        message = str(event)
-        human = self.human_message(message)
-        if message.startswith("API → GET "): self.calls += 1
-        match = re.search(r"HTTP \d+: (\d+) ", message)
-        if match: self.items += int(match.group(1))
-        scope = re.search(r"API rozsah .*?: (\d+) záznamů", message)
-        if scope: self.expected += int(scope.group(1))
-        if not self.stopping: self.phase.setText(self.phase_message(message))
-        self.detail.setText(human)
-        total = max(self.items, self.expected)
-        if total:
-            self.bar.setRange(0, 1000); self.bar.setValue(min(1000, int(1000 * self.items / total)))
-        self.total.setText(f"Zpracováno {self.items} z {total if total else 'celkový počet se zjišťuje'} datových záznamů | API volání: {self.calls}")
-        elapsed = max(time.monotonic() - self.started, 0.001)
-        if total and self.items and self.items < total:
-            seconds = int((total - self.items) * elapsed / self.items)
-            self.eta.setText(f"Odhad dokončení: za {seconds // 60}:{seconds % 60:02d} (přibližně {time.strftime('%H:%M', time.localtime(time.time() + seconds))})")
-        elif total and self.items >= total: self.eta.setText("Odhad dokončení: dokončování detailů a ukládání…")
-        else: self.eta.setText("Odhad dokončení: zjišťuji celkový rozsah…")
+        if isinstance(event, dict):
+            if event.get("type") == "api_call":
+                self.calls = event["calls"]
+            elif event.get("type") == "sync_progress":
+                self.current_phase = event["phase"]
+                self.items = event["completed"]
+                self.expected = event.get("total")
+                self.unit = event.get("unit", "")
+                if not self.stopping:
+                    self.phase.setText(event["message"])
+                if self.expected is None:
+                    self.bar.setRange(0, 0)
+                else:
+                    self.bar.setRange(0, max(1, self.expected))
+                    self.bar.setValue(self.items)
+            self.render_counts()
+        else:
+            self.detail.setText(self.human_message(str(event)))
         self.tick()
+
+    def render_counts(self):
+        known = self.expected is not None
+        count = f"{self.items} z {self.expected}" if known else str(self.items)
+        self.total.setText(f"{count} {self.unit} | API: {self.calls}")
+        self.eta.setText(self.phase_hint())
+
+    def phase_hint(self):
+        if self.current_phase == "completed":
+            return "Načítání úspěšně dokončeno."
+        if self.expected is None:
+            return "Celkový rozsah této fáze není znám; čas dokončení nelze spolehlivě odhadnout."
+        return "Průběh aktuální fáze. Následující kroky mají vlastní počty."
 
     def phase_message(self, message):
         if message.startswith("API → GET "): return "Načítám data z BetterHotelu"

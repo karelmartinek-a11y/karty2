@@ -1,8 +1,9 @@
 import json
+from datetime import date
 from contextlib import nullcontext
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
-from kajovokarty.domain.core import AppError, canonical, now, parse_date, require, uid
+from kajovokarty.domain.core import AppError, canonical, now, require, uid
 
 DEFAULTS = {
     "sync.start_date": "",
@@ -96,11 +97,15 @@ class SettingsService:
                     errors[key] = f"Celé číslo {low} až {high}."
             elif isinstance(DEFAULTS[key], bool) and type(value) is not bool:
                 errors[key] = "Vyžadován přepínač."
-            elif key == "sync.start_date" and value:
+            elif key == "sync.start_date":
                 try:
-                    parse_date(value)
-                except AppError:
-                    errors[key] = "Datum YYYY-MM-DD."
+                    if not isinstance(value, str) or not value:
+                        raise ValueError
+                    parsed = date.fromisoformat(value)
+                    if parsed.isoformat() != value or parsed > date.today():
+                        raise ValueError
+                except (ValueError, TypeError):
+                    errors[key] = "Zadejte platné datum nejvýše do dneška (YYYY-MM-DD)."
             elif key == "network.proxy_url" and value:
                 p = urlparse(value)
                 if (

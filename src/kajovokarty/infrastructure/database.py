@@ -102,6 +102,17 @@ class Database:
                 except BaseException:
                     c.rollback()
                     raise
+            c.executescript(
+                "BEGIN IMMEDIATE;\n"
+                + (Path(__file__).parents[1] / "migrations/sync_settings.sql").read_text(
+                    encoding="utf-8"
+                )
+                + "\n"
+                + (Path(__file__).parents[1] / "migrations/sync_graph_guard.sql").read_text(
+                    encoding="utf-8"
+                )
+                + "\nCOMMIT;"
+            )
             require(
                 c.execute("PRAGMA quick_check").fetchone()[0] == "ok",
                 "DATABASE_INVALID",
