@@ -57,7 +57,7 @@ REPORTS = {
         "source_occurrences",
         "currency_totals",
     ],
-    "helpers": ["helper_entities", "helper_links", "helper_references"],
+    "helpers": ["account_references"],
     "audit": ["audit_events"],
     "import_errors": ["import_diagnostics"],
     "api_compatibility": ["api_compatibility"],
@@ -190,6 +190,7 @@ class ReportService:
                         "difference_minor": evidence["difference"],
                         "leaf_count": len(leaves),
                         "evidence_hash": proof.get("evidence_hash") or digest(proof),
+                        "accounts_provenance": proof.get("accounts_provenance") or [],
                         "note": g["note"],
                         "evidence_context_ids": sorted({p["context_id"] for p in hp}),
                         "evidence_generation_ids": sorted(
@@ -521,7 +522,9 @@ class ReportService:
                     )
                 ]
             if report_id == "helpers":
-                data.update(build_helpers(c, st, ids, filters))
+                data["account_references"] = [dict(r) for r in c.execute(
+                    "SELECT s.variable_symbol,s.reservation,a.booking_reference,s.file_id,s.import_run_id,s.sheet,s.row_number FROM account_symbol s JOIN account_reservation a USING(reservation) ORDER BY s.variable_symbol,s.reservation"
+                )]
             if "currency_totals" in data:
                 base = (
                     "work_objects"
@@ -572,7 +575,7 @@ class ReportService:
             metadata = {
                 "report_schema_id": "KAJOVOKARTY-EXPORT-1",
                 "report_id": report_id,
-                "app_build": "0.3.2",
+                "app_build": "0.4.0",
                 "exported_at": now(),
                 "database_snapshot_id": uid(),
                 "selection_mode": "SINGLE_OBJECT"
@@ -599,6 +602,7 @@ class ReportService:
 
 
 SORT_KEYS = {
+    "account_references": ("variable_symbol", "reservation"),
     "work_objects": ("object_id",),
     "financial_sources": ("source_id",),
     "cashbook_rows": ("source_id",),

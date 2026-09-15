@@ -28,7 +28,7 @@ class Database:
         with self.connect() as c:
             version = c.execute("PRAGMA user_version").fetchone()[0]
             require(
-                version <= 2,
+                version <= 3,
                 "SCHEMA_NEWER",
                 "Databáze pochází z novější verze programu.",
             )
@@ -113,6 +113,18 @@ class Database:
                 )
                 + "\nCOMMIT;"
             )
+            if version < 3:
+                if version == 2:
+                    self._migration_backup(c)
+                sql = (Path(__file__).parents[1] / "migrations/003.sql").read_text(encoding="utf-8")
+                try:
+                    c.executescript("BEGIN IMMEDIATE;\n" + sql)
+                    c.execute("INSERT INTO schema_migration VALUES(3,?,?,?)", (now(), "0.4.0", bytehash(sql.encode())))
+                    c.execute("PRAGMA user_version=3")
+                    c.commit()
+                except BaseException:
+                    c.rollback()
+                    raise
             require(
                 c.execute("PRAGMA quick_check").fetchone()[0] == "ok",
                 "DATABASE_INVALID",
@@ -139,7 +151,7 @@ class Database:
                 )
             raw = candidate.read_bytes()
             manifest = {
-                "schema": 1,
+                "schema": source.execute("PRAGMA user_version").fetchone()[0],
                 "app_build": "0.3.2",
                 "created_at": now(),
                 "files": {"database.sqlite": bytehash(raw)},
@@ -150,7 +162,7 @@ class Database:
                 z.writestr("database.sqlite", raw)
                 z.writestr("manifest.json", json.dumps(manifest))
             os.replace(
-                archive, self.path.parent / ("before-migration-1-2-" + uid() + ".zip")
+                archive, self.path.parent / ("before-migration-" + str(source.execute("PRAGMA user_version").fetchone()[0]) + "-" + uid() + ".zip")
             )
 
     @contextmanager

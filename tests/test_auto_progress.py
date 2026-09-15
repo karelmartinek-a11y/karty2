@@ -18,7 +18,7 @@ def test_live_popup_reports_commits_and_closes_after_terminal_state(
     app = QApplication.instance() or QApplication([])
     for n in (1, 2):
         seed(db, "CASHBOOK_CARD", vs=str(n), minute=f"{n:02d}")
-        seed(db, "BANK_CARD", vs=str(n), seq=str(n))
+        seed(db, "BANK_CARD", vs=str(n), seq=str(n), day="08")
     window = MainWindow(db)
     window.show()
     spin(lambda: not window.jobs)

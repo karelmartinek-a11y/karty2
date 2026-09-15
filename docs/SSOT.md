@@ -1,3 +1,5 @@
+> Aktualizace 0.4.0: online BetterHotel API a navazující pravidla nahrazuje [ruční import Účty](ACCOUNTS_IMPORT.md). Tento nový kontrakt má v uvedených oblastech přednost.
+
 # KájovoKarty — SSOT
 
 **Závazná funkční, datová a technická specifikace programu**  

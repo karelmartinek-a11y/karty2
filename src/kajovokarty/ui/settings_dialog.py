@@ -1,4 +1,4 @@
-from PySide6.QtCore import QTimer, QDate
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QWidget,
     QLineEdit,
-    QDateEdit,
     QCheckBox,
     QComboBox,
     QSpinBox,
@@ -19,30 +18,10 @@ from PySide6.QtWidgets import (
     QApplication,
 )
 from kajovokarty.application.settings import RANGES, DEFAULTS
-from kajovokarty.infrastructure.betterhotel import BetterHotelClient
-from kajovokarty.domain.core import AppError
-
-
-class SecretEdit(QLineEdit):
-    def __init__(self):
-        super().__init__()
-        self.setEchoMode(QLineEdit.Password)
-
-    def focusOutEvent(self, event):
-        self.setEchoMode(QLineEdit.Password)
-        super().focusOutEvent(event)
 
 
 LABELS = {
-    "sync.start_date": "Načítat pomocná data od",
-    "sync.block_days": "Dní v synchronizačním bloku",
-    "sync.timeout_seconds": "Síťový timeout (sekundy)",
-    "sync.retry_count": "Počet opakování síťové chyby",
-    "sync.requests_per_second": "Požadavků za sekundu",
     "matching.bank_window_days": "Časové okno banky (dny)",
-    "matching.max_combination": "Maximální kombinace automatiky",
-    "matching.max_component_items": "Maximální počet vstupů komponenty",
-    "matching.max_search_states": "Limit prozkoumaných kombinací",
     "matching.warning_age_days": "Zvýraznění stáří (dny)",
     "imports.max_megabytes": "Limit jednoho souboru (MiB)",
     "backup.daily": "Denní automatická záloha",
@@ -52,13 +31,13 @@ LABELS = {
     "ui.text_scale": "Velikost textu (%)",
     "ui.high_contrast": "Vysoký kontrast",
     "ui.reduce_motion": "Omezit animace",
-    "network.proxy_url": "Explicitní proxy (volitelné)",
     "data.directory": "Aktuální datová složka",
     "data.backup_directory": "Složka záloh",
     "data.export_directory": "Výchozí složka sestav",
     "imports.last_directory.CASHBOOK_CARD": "Poslední složka pokladny",
     "imports.last_directory.BANK_CARD": "Poslední složka terminálu",
     "imports.last_directory.BOOKING": "Poslední složka Bookingu",
+    "imports.last_directory.ACCOUNTS": "Poslední složka Účtů",
 }
 
 
@@ -73,47 +52,6 @@ def settings_dialog(window):
     form = QFormLayout(body)
     scroll.setWidget(body)
     outer.addWidget(scroll)
-    state = QLabel("Načítám stav připojení…")
-    state.setWordWrap(True)
-    form.addRow(state)
-    window.run(
-        lambda p: window.sync.state(),
-        lambda s: state.setText(
-            f"Připojení: {s['context_id']}\nStav: {s['status']} · poslední úplné načtení: {s['last_full_success_at'] or 'dosud neproběhlo'}"
-        ),
-        False,
-    )
-    access, client, username, password = (
-        SecretEdit(),
-        SecretEdit(),
-        QLineEdit(),
-        SecretEdit(),
-    )
-    for label, w in [
-        ("Access Token — nahrazení", access),
-        ("Client Token — nahrazení", client),
-        ("Proxy uživatel — nahrazení", username),
-        ("Proxy heslo — nahrazení", password),
-    ]:
-        w.setAccessibleName(label)
-        w.setToolTip(label)
-        form.addRow(label, w)
-    form.addRow(QLabel("Prázdná přihlašovací pole zachovají uložené hodnoty."))
-    show = QPushButton("Dočasně zobrazit vyplněná tajemství")
-
-    hide_secrets = QTimer(d)
-    hide_secrets.setSingleShot(True)
-    hide_secrets.timeout.connect(
-        lambda: [w.setEchoMode(QLineEdit.Password) for w in (access, client, password)]
-    )
-
-    def reveal():
-        for w in (access, client, password):
-            w.setEchoMode(QLineEdit.Normal)
-        hide_secrets.start(10000)
-
-    show.clicked.connect(reveal)
-    form.addRow(show)
     error = QLabel()
     error.setWordWrap(True)
     error.setStyleSheet("color:#a13235")
@@ -121,14 +59,9 @@ def settings_dialog(window):
     widgets = {}
     values = window.settings.get()
     for key, value in values.items():
-        if key not in LABELS:
+        if key not in LABELS or key.startswith(("sync.", "network.")):
             continue
-        if key == "sync.start_date":
-            w = QDateEdit(QDate.fromString(value, "yyyy-MM-dd"))
-            w.setCalendarPopup(True)
-            w.setDisplayFormat("d. M. yyyy")
-            w.setMaximumDate(QDate.currentDate())
-        elif key in RANGES:
+        if key in RANGES:
             w = QSpinBox()
             w.setRange(*RANGES[key])
             w.setValue(value)
@@ -167,20 +100,10 @@ def settings_dialog(window):
             form.addRow(LABELS[key], row)
         else:
             form.addRow(LABELS[key], w)
-        if key == "sync.start_date":
-            hint = QLabel(
-                "Do dneška včetně. Zahrnou se pobyty, které do období alespoň částečně "
-                "zasahují. Změna se použije při příštím úplném načtení. "
-                "API může vrátit širší seznam; rezervace mimo období se dále nezpracují."
-            )
-            hint.setWordWrap(True)
-            form.addRow(hint)
 
     def current_values():
         return {
-            k: w.date().toString("yyyy-MM-dd")
-            if isinstance(w, QDateEdit)
-            else w.value()
+            k: w.value()
             if isinstance(w, QSpinBox)
             else w.isChecked()
             if isinstance(w, QCheckBox)
@@ -206,67 +129,12 @@ def settings_dialog(window):
         window.after_mutation()
 
     def save():
-        pair = (
-            (access.text(), client.text()) if access.text() or client.text() else None
-        )
-        proxy = (
-            (username.text(), password.text())
-            if username.text() or password.text()
-            else None
-        )
         updated = current_values()
-        window.run(
-            lambda p: window.settings.save_all(updated, pair, proxy),
-            saved,
-            error_handler=fail,
-        )
-
-    def test():
-        a, b = access.text().strip(), client.text().strip()
-        settings = current_values()
-        proxy = (
-            (username.text(), password.text())
-            if username.text() or password.text()
-            else None
-        )
-
-        def execute(progress):
-            aa, bb = (a, b) if a or b else window.settings.tokens()
-            http = BetterHotelClient(
-                aa,
-                bb,
-                settings,
-                window.cancel,
-                proxy_auth=proxy or window.settings.proxy_auth(),
-            )
-            try:
-                return len(http.collection("/currency"))
-            finally:
-                http.close()
-
-        window.run(
-            execute,
-            lambda n: error.setText(
-                f"GET /currency uspěl ({n} měn). Ostatní endpointy tím nejsou ověřeny."
-            ),
-            error_handler=fail,
-        )
-
-    def compatible():
-        if access.text() or client.text():
-            fail(
-                AppError(
-                    "SETTING_INVALID",
-                    "Před ověřením kompatibility nejprve uložte změněnou dvojici tokenů.",
-                )
-            )
-            return
-        d.accept()
-        window.start_sync(True)
+        window.run(lambda p: window.settings.save_all(updated), saved, error_handler=fail)
 
     def reset():
         for k, w in widgets.items():
-            if k in ("data.directory", "sync.start_date"):
+            if k == "data.directory":
                 continue
             value = DEFAULTS[k]
             if isinstance(w, QSpinBox):
@@ -311,24 +179,6 @@ def settings_dialog(window):
         )
 
     for label, fn in [
-        ("Test připojení", test),
-        ("Ověřit kompatibilitu uloženého připojení", compatible),
-        (
-            "Odstranit uložené tokeny",
-            lambda: window.run(
-                lambda p: window.settings.save_tokens("", ""),
-                lambda r: error.setText("Tokeny odstraněny."),
-                error_handler=fail,
-            ),
-        ),
-        (
-            "Odstranit proxy přihlášení",
-            lambda: window.run(
-                lambda p: window.settings.save_proxy("", ""),
-                lambda r: error.setText("Proxy přihlášení odstraněno."),
-                error_handler=fail,
-            ),
-        ),
         ("Obnovit výchozí volby ve formuláři", reset),
         (
             "Resetovat rozložení tabulek",

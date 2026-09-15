@@ -1,9 +1,6 @@
 import pytest
 from kajovokarty.domain.helpers import normalize_entity
 from kajovokarty.domain.core import AppError
-from kajovokarty.application.settings import SettingsService
-from kajovokarty.application.sync import SyncService
-from test_api import client
 
 SOURCE_ID = 'e67d16b9-64ec-ac15-cd7d-06602e308dd2'
 
@@ -71,29 +68,3 @@ def test_real_source_name_conflict_is_not_suppressed():
             'source': {'id': SOURCE_ID, 'name': 'A'},
             'reservation_source': {'id': SOURCE_ID, 'name': 'B'}}, {})
     assert exc.value.details['field'] == 'reservation_source.name'
-
-
-def test_full_sync_with_observed_alias_shape(db, wire):
-    # Preserve fixture's channel semantics; use the exact live UUID/scalar shape.
-    for endpoint in ('/reservation', '/reservation/R1'):
-        data = wire[endpoint]['data']
-        for row in data if isinstance(data, list) else [data]:
-            if row.get('id') != 'R1':
-                continue
-            row['source'] = SOURCE_ID
-            row.setdefault('reservation_source', {'name': 'Booking.com'})['id'] = SOURCE_ID
-    for endpoint, body in wire.items():
-        data = body.get('data')
-        if isinstance(data, dict) and endpoint.startswith('/invoice/'):
-            data['uuid'] = ''
-        if isinstance(data, dict) and endpoint.startswith('/bill-item/'):
-            data['archived'] = False
-    http = client(wire)
-    try:
-        sync = SyncService(db, SettingsService(db))
-        result = sync.full(http, scope=('2026-09-07', '2026-09-08'))
-        assert result['status'] == sync.state()['status'] == 'READY'
-        with db.connect() as c:
-            assert c.execute('SELECT state FROM operation WHERE id=?', (result['operation_id'],)).fetchone()[0] == 'COMPLETED'
-    finally:
-        http.close()

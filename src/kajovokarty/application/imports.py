@@ -45,6 +45,7 @@ class ImportPreview:
     new: int = 0
     known: int = 0
     totals: dict = field(default_factory=dict)
+    accounts: dict = field(default_factory=dict)
 
     @property
     def valid(self):
@@ -221,7 +222,14 @@ class ImportService:
                     known[key]["canonical_json"] if key in known else None
                 )
                 if old is not None:
-                    if old != value:
+                    # Booking names/stay details can differ between exports.
+                    # Only payment facts determine whether an existing payment conflicts.
+                    old_content = json.loads(old)
+                    payment_fields = ("booking_reference", "payout_id", "payout_date",
+                                      "currency", "signed_amount_minor", "invoice_type", "payment_status")
+                    differs = (any(old_content.get(k) != s.content.get(k) for k in payment_fields)
+                               if s.kind == "BOOKING" else old != value)
+                    if differs:
                         p.diagnostics.append(
                             dict(
                                 severity="ERROR",
@@ -240,6 +248,10 @@ class ImportService:
                         p.totals.get(s.currency, 0) + s.amount
                     )
                 seen[key] = value
+        from kajovokarty.application.accounts import classify
+        _, p.accounts = classify(c, p.files)
+        p.new += p.accounts["new"]
+        p.known += p.accounts["known"]
 
     def commit(self, preview_id, expected_snapshot_hashes=None, cancel=None):
         require(preview_id in self.previews, "STALE_STATE", "Náhled již není dostupný.")
@@ -394,25 +406,34 @@ class ImportService:
                                 canonical(o["raw_types"]),
                             ),
                         )
+                from kajovokarty.application.accounts import commit as commit_accounts
+                p.accounts = commit_accounts(c, p.files, p.id, cancel)
+                inserted += p.accounts["new"]
+                for f in p.files:
+                    if f.request.kind == "ACCOUNTS":
+                        c.execute(
+                            "UPDATE import_file SET counters_json=? WHERE run_id=? AND file_id=? AND sheet_name=?",
+                            (canonical(f.parsed.counters), p.id, f.file_id, f.parsed.sheet),
+                        )
                 if inserted:
                     self.db.invalidate_redo(c)
                 c.execute(
                     "UPDATE import_run SET totals_json=?,row_counts_json=? WHERE id=?",
                     (
                         canonical(p.totals),
-                        canonical({"new": inserted, "known": p.known}),
+                        canonical({"new": inserted, "known": p.known, "accounts": p.accounts}),
                         p.id,
                     ),
                 )
                 self.db.audit(
                     c,
                     "IMPORT_COMMITTED",
-                    after={"new": inserted, "known": p.known, "totals": p.totals},
+                    after={"new": inserted, "known": p.known, "totals": p.totals, "accounts": p.accounts},
                     method="IMPORT",
                     operation=p.id,
                 )
             self.db.finish_operation(p.id)
-            return {"new": inserted, "known": p.known, "totals": p.totals}
+            return {"new": inserted, "known": p.known, "totals": p.totals, "accounts": p.accounts}
         except AppError as e:
             self.db.finish_operation(p.id, e)
             raise
@@ -422,10 +443,17 @@ class ImportService:
     def discard(self, preview_id):
         p = self.previews.pop(preview_id, None)
         if p:
+            errors = [d for d in p.diagnostics if d.get("severity") == "ERROR"
+                      and d.get("code") not in ("SHEET_AMBIGUOUS", "CANCELLED")]
+            error = AppError("IMPORT_INVALID", "Import obsahuje chyby. Žádné nové položky ani vazby nebyly uloženy.",
+                             {"error_count": len(errors)}) if errors else None
             with self.db.transaction() as c:
-                c.execute(
-                    "UPDATE operation SET state='CANCELLED',finished_at=? WHERE id=? AND state='RUNNING'",
-                    (now(), preview_id),
+                changed = c.execute(
+                    "UPDATE operation SET state=?,finished_at=?,safe_error_json=? WHERE id=? AND state='RUNNING'",
+                    ("FAILED" if error else "CANCELLED", now(),
+                     canonical(error.as_dict()) if error else None, preview_id),
                 )
+                if changed.rowcount and error:
+                    self.db.audit(c, "IMPORT_REJECTED", after=error.as_dict(), operation=preview_id)
             for f in p.files:
                 f.snapshot.unlink(missing_ok=True)

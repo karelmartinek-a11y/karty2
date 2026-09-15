@@ -34,8 +34,9 @@ def result_text(result):
             for reason, count in sorted(counts["reasons"].items())
         ]
     labels = {
+        "C_TERMINAL": "Terminál a pokladna podle dne a částky",
         "A": "Storno terminálu",
-        "B": "Booking přes doklad",
+        "B": "Booking přes Účty a variabilní symbol",
         "C_STRONG": "Banka se shodným VS",
         "C_WEAK": "Banka s ověřeným kontextem",
         "D": "Booking započtení",

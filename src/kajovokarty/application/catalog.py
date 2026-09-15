@@ -8,17 +8,60 @@ class CatalogService:
     def __init__(self, db):
         self.db = db
 
+    def import_detail(self, run_id, file_id):
+        with self.db.connect() as c:
+            row = c.execute(
+                "SELECT i.original_name,o.state,r.row_counts_json FROM import_file i JOIN operation o ON o.id=i.run_id JOIN import_run r ON r.id=i.run_id WHERE i.run_id=? AND i.file_id=?",
+                (run_id, file_id),
+            ).fetchone()
+            require(row, "QUERY_INVALID", "Import nebyl nalezen.")
+            diagnostics = [dict(r) for r in c.execute(
+                "SELECT severity,code,message,row_start FROM import_diagnostic WHERE run_id=? AND file_id=? ORDER BY row_start,id",
+                (run_id, file_id),
+            )]
+        counts = json.loads(row["row_counts_json"])
+        from kajovokarty.application.import_messages import file_text, reason
+        if counts.get("booking_result"):
+            return file_text(counts["booking_result"])
+        lines = [row["original_name"]]
+        if row["state"] == "COMPLETED":
+            lines.append(f"Import dokončen. Uložené položky: {counts.get('new', 0)}. Dalších {counts.get('known', 0)} už v programu bylo a neukládaly se podruhé.")
+        elif row["state"] in ("FAILED", "CANCELLED"):
+            lines.append("Import nebyl dokončen. Žádné nové položky ani vazby z tohoto běhu nebyly uloženy.")
+        else:
+            lines.append("Stav importu: " + row["state"])
+        lines.extend(["", "Zjištěné chyby a upozornění:"] if diagnostics else [])
+        for d in diagnostics:
+            lines.append(reason(d))
+        return "\n".join(lines)
+
     def rows(self, kind):
         queries = {
             "generations": "SELECT id,context_id,kind,state,published_at FROM helper_generation WHERE state='PUBLISHED' ORDER BY published_at DESC",
-            "imports": "SELECT i.run_id,i.file_id,i.original_name,i.sheet_name,i.input_mode,i.authoritative_snapshot_hash AS sha256,o.started_at,o.state,i.counters_json FROM import_file i JOIN operation o ON o.id=i.run_id ORDER BY o.started_at DESC",
+            "imports": "SELECT i.run_id,i.file_id,i.original_name,i.sheet_name,i.input_mode,i.authoritative_snapshot_hash AS sha256,o.started_at,o.state,i.counters_json,r.row_counts_json,r.selected_sources_json FROM import_file i JOIN operation o ON o.id=i.run_id JOIN import_run r ON r.id=i.run_id ORDER BY o.started_at DESC",
             "audit": "SELECT id,timestamp,type,method,object_refs_json,before_json,after_json FROM audit_event ORDER BY timestamp DESC",
             "operations": "SELECT id,type,state,started_at,finished_at FROM operation ORDER BY started_at DESC",
             "compatibility": "SELECT r.id,r.status,r.started_at,r.range_start,r.range_end,coalesce(json_extract(o.recovery_json,'$.evidence_class'),'UNKNOWN') AS evidence_class FROM api_compatibility_run r JOIN operation o ON o.id=r.id ORDER BY r.started_at DESC",
         }
         require(kind in queries, "QUERY_INVALID", "Neznámá tabulka.")
         with self.db.connect() as c:
-            return [dict(r) for r in c.execute(queries[kind])]
+            rows = [dict(r) for r in c.execute(queries[kind])]
+        if kind == "imports":
+            for row in rows:
+                counts = json.loads(row.pop("row_counts_json"))
+                kinds = json.loads(row.pop("selected_sources_json"))
+                row["status_label"] = {"COMPLETED": "Zpracováno", "FAILED": "Nepodařilo se načíst", "CANCELLED": "Nenačteno", "RUNNING": "Probíhá načítání", "INTERRUPTED": "Přerušeno"}.get(row["state"], "Nedokončeno")
+                if counts.get("booking_result"):
+                    report = counts["booking_result"]
+                    row["result_text"] = f"Načtené platby: {report['added']}. Již uložené platby: {report['already_saved']}."
+                    if report["state"] != "COMPLETED":
+                        row["result_text"] = "Žádné platby se nepřidaly. Otevřete podrobnosti pro vysvětlení."
+                elif row["state"] == "COMPLETED":
+                    what = {"BOOKING": "Platby z Bookingu", "ACCOUNTS": "Vazby rezervací", "CASHBOOK_CARD": "Pokladní pohyby", "BANK_CARD": "Platby z terminálu"}.get(kinds[0] if len(kinds) == 1 else "", "Položky")
+                    row["result_text"] = f"{what} — načteno: {counts.get('new', 0)}. Již v programu: {counts.get('known', 0)}."
+                else:
+                    row["result_text"] = "Z tohoto souboru se zatím nic nepřidalo. Podrobnosti otevřete dvojklikem."
+        return rows
 
     def source_origin(self, sid):
         with self.db.connect() as c:

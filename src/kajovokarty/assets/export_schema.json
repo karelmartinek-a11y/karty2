@@ -122,7 +122,8 @@
     "evidence_hash:S",
     "note:S?",
     "evidence_context_ids:J",
-    "evidence_generation_ids:J"
+    "evidence_generation_ids:J",
+    "accounts_provenance:J"
   ],
   "group_leaves": [
     "group_id:S",
@@ -284,5 +285,14 @@
     "response_hashes_json:J",
     "field_types_json:J",
     "error_codes_json:J"
+  ],
+  "account_references": [
+    "variable_symbol:S",
+    "reservation:S",
+    "booking_reference:S",
+    "file_id:S",
+    "import_run_id:S",
+    "sheet:S",
+    "row_number:I"
   ]
 }

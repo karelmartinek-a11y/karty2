@@ -165,19 +165,14 @@ def test_all_main_views_expose_sort_and_filter_on_every_column(db, fixtures, wir
     from kajovokarty.application.imports import ImportService, ImportInput
     from kajovokarty.application.sync import SyncService
     from kajovokarty.application.settings import SettingsService
-    from test_api import client
 
     _app = QApplication.instance() or QApplication([])
     importer = ImportService(db)
     importer.commit(
         importer.preflight([ImportInput("BOOKING", str(fixtures / "booking_a.csv"))]).id
     )
-    sync = SyncService(db, SettingsService(db))
-    http = client(wire)
-    try:
-        sync.full(http, scope=("2026-09-07", "2026-09-08"))
-    finally:
-        http.close()
+    from test_accounts import import_sample
+    import_sample(db)
     window = MainWindow(db)
     window.show()
     errors = []

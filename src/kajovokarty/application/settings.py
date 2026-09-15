@@ -31,6 +31,7 @@ DEFAULTS = {
     "imports.last_directory.CASHBOOK_CARD": "",
     "imports.last_directory.BANK_CARD": "",
     "imports.last_directory.BOOKING": "",
+    "imports.last_directory.ACCOUNTS": "",
 }
 RANGES = {
     "sync.block_days": (1, 31),

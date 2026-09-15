@@ -40,12 +40,14 @@ def query(c, filters, sort, page, page_size):
     ), aggregate_rows AS (
       SELECT t.root, count(*) leaf_count,
       sum(CASE WHEN f.kind='CASHBOOK_CARD' THEN f.signed_amount_minor ELSE -f.signed_amount_minor END) difference,
+      coalesce(sum(CASE WHEN f.kind='CASHBOOK_CARD' THEN f.signed_amount_minor END),
+        sum(f.signed_amount_minor)) amount,
       min(f.local_date) date,max(f.local_date) date_end,
       group_concat(DISTINCT f.kind) kinds, json_group_array(f.id) leaves
       FROM tree t JOIN work_object w ON w.id=t.id AND w.type='SOURCE'
       JOIN financial_source f ON f.id=w.source_id GROUP BY t.root
     )
-    SELECT r.*, a.difference, abs(a.difference) amount, a.leaf_count,a.kinds,a.date,a.date_end,
+    SELECT r.*, a.difference, a.amount, a.leaf_count,a.kinds,a.date,a.date_end,
       'G'||substr(r.id,1,10) primary_identifier,g.note description,g.note,a.leaves,
       (a.difference=0) resolved, CASE WHEN a.difference=0 THEN '' ELSE 'OPEN_AGGREGATE' END reason,g.method
       FROM roots r JOIN aggregate_rows a ON a.root=r.id JOIN reconciliation_group g ON g.object_id=r.id

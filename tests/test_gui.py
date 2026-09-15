@@ -34,7 +34,7 @@ def test_actual_widgets_import_select_group(db, fixtures):
             if (
                 isinstance(widget, QDialog)
                 and widget.isVisible()
-                and widget.windowTitle().startswith("Náhled importu")
+                and widget.objectName() == "bookingImportQueue"
             ):
                 buttons = widget.findChild(QDialogButtonBox)
                 QTest.mouseClick(buttons.button(QDialogButtonBox.Ok), Qt.LeftButton)
@@ -45,6 +45,9 @@ def test_actual_widgets_import_select_group(db, fixtures):
     window.preflight([ImportInput("BOOKING", str(fixtures / "booking_a.csv"))])
     spin(lambda: window.model.rowCount() == 21 and not window.busy)
     timer.stop()
+    for dialog in window.findChildren(QDialog):
+        if dialog.objectName() == "bookingImportResult":
+            dialog.close()
     selection = window.table.selectionModel()
     selection.select(
         window.model.index(0, 0), QItemSelectionModel.Select | QItemSelectionModel.Rows
@@ -84,66 +87,32 @@ def test_actual_widgets_import_select_group(db, fixtures):
     assert not errors, errors
 
 
-def test_settings_inline_validation_and_appearance(db):
-    from PySide6.QtWidgets import QLineEdit, QLabel, QDateEdit
-    from PySide6.QtCore import QDate
-    from kajovokarty.infrastructure.database import Database
-    from kajovokarty.application.settings import SettingsService
-
+def test_settings_without_api_and_persisted_import_folder(db, tmp_path):
+    from PySide6.QtWidgets import QLineEdit, QDialogButtonBox
     app = QApplication.instance() or QApplication([])
     window = MainWindow(db)
     window.show()
     spin(lambda: not window.jobs)
-    stage = [0]
+    errors = []
 
     def drive():
-        dialog = next(
-            (
-                w
-                for w in app.topLevelWidgets()
-                if isinstance(w, QDialog)
-                and w.isVisible()
-                and w.windowTitle() == "Nastavení KájovoKarty"
-            ),
-            None,
-        )
+        dialog = app.activeModalWidget()
         if dialog is None:
             return
-        edit = next(
-            w
-            for w in dialog.findChildren(QLineEdit)
-            if w.accessibleName() == "Požadavků za sekundu"
-        )
-        buttons = dialog.findChild(QDialogButtonBox)
-        if stage[0] == 0 and not window.busy:
-            date_edit = dialog.findChild(QDateEdit)
-            assert date_edit.accessibleName() == "Načítat pomocná data od"
-            assert date_edit.calendarPopup()
-            assert date_edit.date() == QDate(2026, 1, 1)
-            assert date_edit.maximumDate() == QDate.currentDate()
-            date_edit.setDate(QDate(2026, 2, 3))
-            edit.setText("neplatné")
-            stage[0] = 1
-            buttons.button(QDialogButtonBox.Save).click()
-        elif (
-            stage[0] == 1
-            and not window.busy
-            and any("neplatná" in w.text() for w in dialog.findChildren(QLabel))
-        ):
-            assert db.path.exists()
-            edit.setText("0.8")
-            stage[0] = 2
-            buttons.button(QDialogButtonBox.Save).click()
+        try:
+            edits = {w.accessibleName(): w for w in dialog.findChildren(QLineEdit)}
+            assert not any("Token" in n or "Proxy" in n or "Požadavků" in n for n in edits)
+            edits["Poslední složka Účtů"].setText(str(tmp_path))
+            dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.Save).click()
+        except Exception as error:
+            errors.append(error)
+            dialog.reject()
 
-    timer = QTimer()
-    timer.timeout.connect(drive)
-    timer.start(20)
+    QTimer.singleShot(50, drive)
     window.settings_dialog()
-    timer.stop()
     spin(lambda: not window.jobs)
-    assert stage[0] == 2 and window.settings.get()["sync.requests_per_second"] == "0.8"
-    assert SettingsService(Database(db.path)).get()["sync.start_date"] == "2026-02-03"
-    window.view_timer.stop()
+    assert not errors
+    assert window.settings.get()["imports.last_directory.ACCOUNTS"] == str(tmp_path)
     window.close()
     app.processEvents()
 

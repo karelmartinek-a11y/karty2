@@ -35,6 +35,7 @@ REASON_NAMES = {
     "AUTO_SUPPRESSED": "Automatické spojení ručně zakázáno",
     "AUTO_SEARCH_LIMIT": "Dosažen limit hledání kombinací",
     "MULTIPLE_CANDIDATES": "Více možných shod — vyberte ručně",
+    "ACCOUNTS_REFERENCE_MISSING": "Chybí vazba variabilního symbolu v Účtech",
     "HELPER_DATA_NOT_SYNCED": "Pomocná data nejsou ověřena pro toto období",
     "HELPER_ENTITY_NOT_OBSERVED": "Vazba obsahuje neaktivní nebo neúplná pomocná data",
     "HELPER_CHAIN_UNVERIFIED": "Nelze ověřit nepřítomnost vazby na pokladnu",

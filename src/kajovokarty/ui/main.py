@@ -41,12 +41,10 @@ from kajovokarty.domain.core import (
 from kajovokarty.application.imports import ImportService, ImportInput
 from kajovokarty.application.work import WorkService
 from kajovokarty.application.settings import SettingsService
-from kajovokarty.application.sync import SyncService
 from kajovokarty.application.matching import MatchingService
 from kajovokarty.application.backup import BackupService
 from kajovokarty.application.catalog import CatalogService
 from kajovokarty.application.reports import ReportService
-from kajovokarty.infrastructure.betterhotel import BetterHotelClient
 from kajovokarty.ui.models import TableModel, WORK_COLUMNS
 from kajovokarty.ui.work_table import WorkTable
 from kajovokarty.ui.workers import Job
@@ -55,7 +53,7 @@ from kajovokarty.ui.actions import ActionSpec, ActionRegistry
 NAV = [
     "Nevyřízené",
     "Vyřízené",
-    "Importy a BetterHotel",
+    "Importy",
     "Pomocná data",
     "Vyhledávání",
     "Sestavy",
@@ -66,6 +64,7 @@ SOURCE_NAMES = {
     "Pokladna (XLS)": "CASHBOOK_CARD",
     "Terminál (CSV / XLS / XLSX)": "BANK_CARD",
     "Booking.com (CSV)": "BOOKING",
+    "Účty (XLS)": "ACCOUNTS",
 }
 REPORT_NAMES = {
     "Nevyřízené": "unresolved",
@@ -77,7 +76,6 @@ REPORT_NAMES = {
     "Pomocná data": "helpers",
     "Audit": "audit",
     "Importní chyby": "import_errors",
-    "Ověření BetterHotel": "api_compatibility",
 }
 
 
@@ -125,7 +123,6 @@ class MainWindow(QMainWindow):
         self.panel_revision = 0
         self.imports = ImportService(db)
         self.settings = SettingsService(db)
-        self.sync = SyncService(db, self.settings)
         self.matching = MatchingService(db, self.settings)
         self.backup = BackupService(db)
         self.catalog = CatalogService(db)
@@ -146,9 +143,7 @@ class MainWindow(QMainWindow):
         self.column_states = {}
         self.view_sorts = {}
         self.facet_rows = []
-        self.helper_inactive = False
         self.global_history = False
-        self.helper_history = None
         self.setWindowTitle("KájovoKarty")
         self.resize(1366, 850)
         self.setMinimumSize(1100, 700)
@@ -184,7 +179,6 @@ class MainWindow(QMainWindow):
         bar.addWidget(wordmark)
         specs = [
             ("import", "Importovat", "Ctrl+I", self.choose_import),
-            ("sync", "Načíst BetterHotel", "", self.start_sync),
             ("auto", "Automaticky spárovat vše", "", self.start_auto),
             ("detail", "Otevřít detail", "Return", self.open_detail),
             (
@@ -243,7 +237,7 @@ class MainWindow(QMainWindow):
                     handler,
                 )
             )
-            if id in ("import", "sync", "auto"):
+            if id in ("import", "auto"):
                 bar.addAction(action)
         bar.addSeparator()
         self.search = QLineEdit()
@@ -282,7 +276,7 @@ class MainWindow(QMainWindow):
         self.currency = QComboBox()
         self.currency.addItems(["Všechny měny", "CZK", "EUR"])
         self.source = QComboBox()
-        self.source.addItems(["Všechny zdroje", *SOURCE_NAMES])
+        self.source.addItems(["Všechny zdroje", *[n for n, k in SOURCE_NAMES.items() if k != "ACCOUNTS"]])
         self.date_from = QLineEdit()
         self.date_from.setPlaceholderText("Datum od YYYY-MM-DD")
         self.date_to = QLineEdit()
@@ -440,6 +434,7 @@ class MainWindow(QMainWindow):
         while self.contextbar.count():
             item = self.contextbar.takeAt(0)
             if item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
         actions = {
             0: [
@@ -455,14 +450,13 @@ class MainWindow(QMainWindow):
                 ("Pokladna", lambda: self.choose_import("CASHBOOK_CARD")),
                 ("Terminál", lambda: self.choose_import("BANK_CARD")),
                 ("Booking", lambda: self.choose_import("BOOKING")),
+                ("Účty", lambda: self.choose_import("ACCOUNTS")),
                 ("Zopakovat uložený import", self.repeat_import),
                 ("Původní soubor", self.save_original),
             ],
             3: [
-                ("Úplně načíst BetterHotel", self.start_sync),
-                ("Detail a reference", self.open_detail),
-                ("Zahrnout / skrýt nezjištěné", self.toggle_inactive),
-                ("Historie připojení", self.choose_helper_history),
+                ("Importovat Účty", lambda: self.choose_import("ACCOUNTS")),
+                ("Detail vazby", self.open_detail),
             ],
             4: [
                 ("Přidat do výběru", self.add_selection),
@@ -478,7 +472,6 @@ class MainWindow(QMainWindow):
                 ("Záloha", self.backup_dialog),
                 ("Obnova", self.restore_dialog),
                 ("Diagnostika", self.diagnostic_dialog),
-                ("Pokračovat v označeném načítání", self.resume_sync),
                 ("Nápověda", self.help_dialog),
             ],
         }
@@ -556,15 +549,10 @@ class MainWindow(QMainWindow):
             if scope == 2:
                 rows = self.catalog.rows("imports")
             elif scope == 3:
-                rows = self.sync.entities(
-                    self.helper_inactive, *(self.helper_history or (None, None))
-                )
-                from kajovokarty.domain.core import search_tokens
-
+                from kajovokarty.application.accounts import rows as account_rows
+                from kajovokarty.domain.core import search_normalize, search_tokens
                 tokens = search_tokens(f.get("text", ""))
-                rows = [
-                    r for r in rows if all(t in r["local_search_text"] for t in tokens)
-                ]
+                rows = [r for r in account_rows(self.db) if all(t in search_normalize(" ".join(str(v) for v in r.values())) for t in tokens)]
             elif scope == 6:
                 rows = self.catalog.rows("audit")
             elif scope == 5:
@@ -598,6 +586,8 @@ class MainWindow(QMainWindow):
                 if self.column_states.get(scope)
                 else [("info", "Žádné záznamy")]
             )
+            if scope == 2:
+                cols = [("original_name", "Soubor"), ("started_at", "Čas načtení"), ("status_label", "Stav"), ("result_text", "Výsledek")]
             self.restoring_selection = True
             self.model.replace(self.rows, cols)
             self.total = value["total"]
@@ -861,7 +851,7 @@ class MainWindow(QMainWindow):
         ):
             return False
         if not hasattr(self, "table"):
-            return id in ("import", "sync", "auto", "find", "refresh")
+            return id in ("import", "auto", "find", "refresh")
         rows = self.selected_rows()
         if id in ("detail", "copy", "copy_all", "audit_object"):
             return bool(rows)
@@ -1188,9 +1178,9 @@ class MainWindow(QMainWindow):
             kind = SOURCE_NAMES[name]
         paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "Vyberte úplné exportní soubory",
+            "Vyberte jeden nebo více CSV souborů z Bookingu" if kind == "BOOKING" else "Vyberte úplné exportní soubory",
             self.settings.get().get("imports.last_directory." + kind, ""),
-            "Exporty (*.xls *.xlsx *.csv)",
+            "Booking CSV (*.csv)" if kind == "BOOKING" else "Exporty (*.xls *.xlsx *.csv)",
         )
         if paths:
             self.settings.save(
@@ -1199,12 +1189,65 @@ class MainWindow(QMainWindow):
             self.preflight([ImportInput(kind, p) for p in paths])
 
     def preflight(self, inputs):
+        if inputs and all(request.kind == "BOOKING" for request in inputs):
+            self.booking_import_queue(inputs)
+            return
         self.run(
             lambda p: self.imports.preflight(
                 inputs, self.settings.get()["imports.max_megabytes"], self.cancel, p
             ),
             self.import_preview,
         )
+
+    def booking_import_queue(self, inputs):
+        if self.busy:
+            return
+        dialog = QDialog(self)
+        dialog.setObjectName("bookingImportQueue")
+        dialog.setWindowTitle("Načíst platby z Bookingu")
+        dialog.resize(740, 420)
+        layout = QVBoxLayout(dialog)
+        explanation = QLabel("Vybrané soubory načteme jeden po druhém v uvedeném pořadí. Pokud se některý nepodaří načíst, pokračujeme dalším. Platby, které už v programu jsou, neuložíme podruhé.")
+        explanation.setWordWrap(True)
+        layout.addWidget(explanation)
+        files = QPlainTextEdit()
+        files.setReadOnly(True)
+        files.setPlainText("\n".join(f"{i}. {Path(r.original_name or r.path or 'Uložený soubor').name}" for i, r in enumerate(inputs, 1)))
+        layout.addWidget(files)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("Načíst vybrané soubory")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        from kajovokarty.application.booking_import import BookingImportService
+        self.run(
+            lambda progress: BookingImportService(self.db).run(inputs, self.settings.get()["imports.max_megabytes"], self.cancel, progress),
+            self.booking_import_completed,
+        )
+
+    def booking_import_completed(self, reports):
+        from kajovokarty.application.import_messages import batch_text
+        self.after_mutation()
+        added = sum(r["added"] for r in reports)
+        unsuccessful = sum(r["state"] != "COMPLETED" for r in reports)
+        self.status.setText(f"Načtené platby z Bookingu: {added}. " + (f"Nedokončené soubory: {unsuccessful}; důvody jsou v přehledu výsledků." if unsuccessful else "Všechny vybrané soubory byly zpracovány."))
+        dialog = QDialog(self)
+        dialog.setObjectName("bookingImportResult")
+        dialog.setWindowTitle("Výsledek načtení plateb z Bookingu")
+        dialog.setAttribute(Qt.WA_DeleteOnClose)
+        dialog.resize(860, 600)
+        layout = QVBoxLayout(dialog)
+        text = QPlainTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText(batch_text(reports))
+        layout.addWidget(text)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.button(QDialogButtonBox.Close).setText("Zavřít")
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+        dialog.show()
 
     def import_preview(self, preview):
         ambiguous = [e for e in preview.diagnostics if e["code"] == "SHEET_AMBIGUOUS"]
@@ -1233,20 +1276,42 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, lambda: self.preflight(inputs))
             return
         d = QDialog(self)
-        d.setWindowTitle("Náhled importu — dosud nic finančně nezapsáno")
+        d.setWindowTitle("Náhled importu — dosud nepotvrzeno")
         d.resize(940, 650)
         layout = QVBoxLayout(d)
+        errors = [e for e in preview.diagnostics if e.get("severity") == "ERROR"]
+        summary = QLabel(
+            f"Import nelze dokončit: {len(errors)} chyb. Žádné nové položky ani vazby nebyly uloženy."
+            if errors else "Toto je náhled. Položky se uloží až tlačítkem Importovat."
+        )
+        summary.setObjectName("importOutcomeSummary")
+        summary.setWordWrap(True)
+        if errors:
+            d.setWindowTitle("Import nelze dokončit — nalezeny chyby")
+            summary.setStyleSheet("color:#a13235;font-weight:bold")
+        layout.addWidget(summary)
         layout.addWidget(
             QLabel(
-                f"Nové: {preview.new} · známé: {preview.known} · součty nových řádků: "
+                f"Připravené nové: {preview.new} · známé: {preview.known} · součty připravených řádků: "
                 + ", ".join(
                     display_money(v) + " " + k for k, v in preview.totals.items()
                 )
             )
         )
+        if any(f.request.kind == "ACCOUNTS" for f in preview.files):
+            layout.addWidget(QLabel(f"Účty: nové vazby {preview.accounts['new']} · duplicity {preview.accounts['known']} · konflikty {preview.accounts['conflicts']} · neúplné řádky {preview.accounts['incomplete']}"))
         box = QPlainTextEdit()
         box.setReadOnly(True)
         box.setPlainText(
+            "\n".join(
+                ("CHYBA" if e.get("severity") == "ERROR" else "UPOZORNĚNÍ")
+                + " · " + str(e.get("file") or "")
+                + (f" · řádek {e['row_start']}" if e.get("row_start") else "")
+                + ": " + e["message"] + " (" + e["code"] + ")"
+                for e in preview.diagnostics
+            )
+            + "\n\nPodrobnosti souborů:\n"
+            +
             "\n".join(
                 f.name
                 + " · "
@@ -1277,11 +1342,20 @@ class MainWindow(QMainWindow):
                         {f.file_id: f.sha256 for f in preview.files},
                         self.cancel,
                     ),
-                    self.after_mutation,
+                    self.import_completed,
                 ),
             )
         else:
             self.imports.discard(preview.id)
+            self.status.setText(
+                "Import selhal: žádné nové položky ani vazby nebyly uloženy. Podrobnosti jsou v Importech."
+                if errors else "Import zrušen: žádné nové položky ani vazby nebyly uloženy."
+            )
+            self.refresh()
+
+    def import_completed(self, result):
+        self.after_mutation(result)
+        self.status.setText(f"Import dokončen. Nově uloženo: {result['new']} · již známé: {result['known']}.")
 
     def repeat_import(self):
         rows = self.selected_rows()
@@ -1318,115 +1392,6 @@ class MainWindow(QMainWindow):
                     lambda p: self.catalog.original(r["file_id"], path),
                     self.after_mutation,
                 )
-
-    def toggle_inactive(self):
-        self.helper_inactive = not self.helper_inactive
-        self.refresh()
-
-    def choose_helper_history(self):
-        def show(rows):
-            labels = ["Aktuální připojení"] + [
-                r["published_at"] + " · " + r["context_id"] + " · " + r["id"]
-                for r in rows
-            ]
-            label, ok = QInputDialog.getItem(
-                self, "Historické grafy — pouze prohlížení", "Graf:", labels, 0, False
-            )
-            if ok:
-                index = labels.index(label)
-                self.helper_history = (
-                    None
-                    if index == 0
-                    else (rows[index - 1]["context_id"], rows[index - 1]["id"])
-                )
-                self.refresh()
-
-        self.run(lambda p: self.catalog.rows("generations"), show, False)
-
-    def resume_sync(self):
-        rows = self.selected_rows()
-        if not rows or rows[0].get("type") != "SYNC":
-            self.show_error(
-                AppError(
-                    "STALE_STATE",
-                    "Označte přerušenou operaci SYNC v tabulce Nastavení.",
-                )
-            )
-            return
-        op = rows[0]["id"]
-
-        def execute(progress):
-            a, b = self.settings.tokens()
-            http = BetterHotelClient(
-                a,
-                b,
-                self.settings.get(),
-                self.cancel,
-                proxy_auth=self.settings.proxy_auth(),
-                progress=progress,
-            )
-            try:
-                return self.sync.resume(http, op, progress)
-            finally:
-                http.close()
-
-        from kajovokarty.ui.sync_progress import SyncProgressDialog
-        dialog = SyncProgressDialog(self, self.cancel_operation)
-        dialog.show()
-        self.run(
-            execute,
-            lambda result: (dialog.finish(), self.after_mutation(result)),
-            error_handler=lambda error: (dialog.finish(), self.show_error(error)),
-            progress_handler=dialog.update_progress,
-        )
-
-    def start_sync(self, compatibility=False):
-        if self.busy:
-            return
-
-        def confirm(scope):
-            if (
-                QMessageBox.question(
-                    self,
-                    "Ověřit kompatibilitu BetterHotel"
-                    if compatibility
-                    else "Načíst BetterHotel",
-                    f"Úplně načíst období {scope[0]} až {scope[1]}? Přerušené načtení se nezpřístupní pro nové automatické vazby.",
-                )
-                != QMessageBox.Yes
-            ):
-                return
-
-            def execute(progress):
-                access, client = self.settings.tokens()
-                http = BetterHotelClient(
-                    access,
-                    client,
-                    self.settings.get(),
-                    self.cancel,
-                    proxy_auth=self.settings.proxy_auth(),
-                    progress=progress,
-                )
-                try:
-                    return self.sync.full(http, compatibility, progress, scope)
-                finally:
-                    http.close()
-
-            from kajovokarty.ui.sync_progress import SyncProgressDialog
-            dialog = SyncProgressDialog(self, self.cancel_operation)
-            dialog.show()
-            self.run(
-                execute,
-                lambda r: (
-                    dialog.finish(),
-                    self.status.setText("BetterHotel: graf publikován."),
-                    self.refresh(),
-                ),
-                error_handler=lambda error: (dialog.finish(), self.show_error(error)),
-                progress_handler=dialog.update_progress,
-            )
-
-        self.run(lambda p: self.sync.scope(), confirm, False)
 
     def start_auto(self):
         if self.busy:
@@ -1506,8 +1471,14 @@ class MainWindow(QMainWindow):
                     text_dialog(self, "Detail běhu automatiky", canonical(operation))
 
             self.run(load, show, False)
+        elif self.scope == 2 and r.get("run_id") and r.get("file_id"):
+            self.run(
+                lambda p: self.catalog.import_detail(r["run_id"], r["file_id"]),
+                lambda detail: text_dialog(self, "Výsledek importu", detail),
+                False,
+            )
         elif self.scope == 3:
-            self.helper_dialog(r)
+            text_dialog(self, "Vazba z Účtů", json.dumps(r, ensure_ascii=False, indent=2))
         else:
             text_dialog(
                 self, "Detail záznamu", json.dumps(r, ensure_ascii=False, indent=2)
@@ -1538,95 +1509,8 @@ class MainWindow(QMainWindow):
             json.dumps(json.loads(r["payload_json"]), ensure_ascii=False, indent=2)
         )
         layout.addWidget(box)
-        layout.addWidget(
-            button("Obnovit tento detail", lambda: (d.accept(), self.refresh_helper(r)))
-        )
-        if r["resource_type"] == "reservation":
-            layout.addWidget(
-                button(
-                    "Rozhodnutí o Booking referenci",
-                    lambda: (d.accept(), self.reference_dialog(r)),
-                )
-            )
         layout.addWidget(button("Zavřít", d.accept))
         d.exec()
-
-    def refresh_helper(self, r):
-        from kajovokarty.application.refresh import RefreshService
-
-        def execute(progress):
-            a, b = self.settings.tokens()
-            client = BetterHotelClient(
-                a,
-                b,
-                self.settings.get(),
-                self.cancel,
-                proxy_auth=self.settings.proxy_auth(),
-            )
-            try:
-                return RefreshService(self.db, self.settings).refresh(
-                    client, r["resource_type"], r["external_id"], r["context_id"]
-                )
-            finally:
-                client.close()
-
-        self.run(
-            execute,
-            lambda result: (
-                self.refresh(),
-                text_dialog(
-                    self,
-                    "Publikovaný detail"
-                    if result["published"]
-                    else "Pouze náhled — pro automatiku načtěte celý graf",
-                    json.dumps(result["target"], ensure_ascii=False, indent=2),
-                ),
-            ),
-        )
-
-    def reference_dialog(self, r):
-        from kajovokarty.application.overrides import OverrideService
-
-        service = OverrideService(self.db)
-
-        def show(result):
-            ref = result["reference"]
-            previous = result["override"]
-            d = QDialog(self)
-            d.setWindowTitle("Booking reference")
-            layout = QVBoxLayout(d)
-            layout.addWidget(QLabel(result["decision"]["resolution_status"]))
-            choices = QComboBox()
-            choices.addItems(ref["candidates"])
-            layout.addWidget(choices)
-
-            def apply(action):
-                candidate = choices.currentText() if action == "ACCEPT" else None
-                d.accept()
-                self.run(
-                    lambda p: service.decide(
-                        r["context_id"],
-                        r["external_id"],
-                        action,
-                        candidate,
-                        previous["revision"] if previous else 0,
-                        ref["candidate_set_hash"],
-                    ),
-                    self.after_mutation,
-                )
-
-            accept = button("Potvrdit tuto referenci", lambda: apply("ACCEPT"))
-            accept.setEnabled(bool(ref["candidates"]))
-            layout.addWidget(accept)
-            layout.addWidget(
-                button("Odmítnout reference pro automatiku", lambda: apply("REJECT"))
-            )
-            layout.addWidget(button("Zrušit ruční rozhodnutí", lambda: apply("CLEAR")))
-            d.exec()
-
-        self.run(
-            lambda p: service.inspect(r["context_id"], r["external_id"]), show, False
-        )
 
     def detail_dialog(self, e):
         d = QDialog(self)
@@ -1939,7 +1823,7 @@ class MainWindow(QMainWindow):
         text_dialog(
             self,
             "Nápověda",
-            "1. Importovat → zvolit zdroj a úplné exporty → zkontrolovat náhled → Importovat.\n2. Načíst BetterHotel pouze po zadání tokenů v Nastavení.\n3. Spustit automatické párování výslovným tlačítkem.\n4. Ručně: přetáhnout platbu na protějšek nebo skupinu. Členy upravíte v Párovací ploše; vytažením do zóny Rozpárovat je uvolníte. CZK a EUR nelze spojit. Rozdíl musí být přesně nula pro Vyřízeno.\n5. Rozložení zachová podskupiny. Ctrl+Z / Ctrl+Y vrací platné příkazy. Import se nevrací.\n6. Každý sloupec: šipka v záhlaví otevře filtr hodnot; kliknutí na název přepíná řazení. Sestavy: CSV jako ZIP, XLSX, PDF.\n7. Zálohy neobsahují tokeny. Obnova vytvoří nové připojení, pomocná data je třeba úplně načíst.\n\nKlávesy: Ctrl+I import, Ctrl+F hledání, Ctrl+Space výběr, Ctrl+M skupina, Enter detail, F2 poznámka, F5 místní obnova.\n\nVývojová verze 0.3.2 — rozsah ověření a zbývající omezení jsou v docs/VALIDATION.md repozitáře.",
+            "1. Importovat → zvolit zdroj a úplné exporty → zkontrolovat náhled → Importovat.\n2. Importovat Účty (XLS): Variabilní symbol, Číslo rezervace a Original ID.\n3. Spustit automatické párování výslovným tlačítkem.\n4. Ručně: přetáhnout platbu na protějšek nebo skupinu. Členy upravíte v Párovací ploše; vytažením do zóny Rozpárovat je uvolníte. CZK a EUR nelze spojit. Rozdíl musí být přesně nula pro Vyřízeno.\n5. Rozložení zachová podskupiny. Ctrl+Z / Ctrl+Y vrací platné příkazy. Import se nevrací.\n6. Každý sloupec: šipka v záhlaví otevře filtr hodnot; kliknutí na název přepíná řazení. Sestavy: CSV jako ZIP, XLSX, PDF.\n7. Zálohy obsahují také importované vazby z Účtů.\n\nKlávesy: Ctrl+I import, Ctrl+F hledání, Ctrl+Space výběr, Ctrl+M skupina, Enter detail, F2 poznámka, F5 místní obnova.\n\nVývojová verze 0.4.0 — rozsah ověření a zbývající omezení jsou v docs/VALIDATION.md repozitáře.",
         )
 
     def save_filter(self):

@@ -50,11 +50,12 @@ SCHEMAS = {
 @dataclass
 class Parsed:
     sheet: str
-    header_map: list
+    header_map: list | dict
     occurrences: list = field(default_factory=list)
     sources: list = field(default_factory=list)
     diagnostics: list = field(default_factory=list)
     counters: dict = field(default_factory=dict)
+    accounts: list = field(default_factory=list)
 
 
 def safe_raw(v):
@@ -443,14 +444,12 @@ def booking(d):
     d["invoice_type"] = enum(
         d["invoice_type"], {"reservation": "RESERVATION", "rezervace": "RESERVATION"}
     )
-    d["reservation_status"] = enum(
-        d["reservation_status"],
-        {
+    # Stay status is descriptive metadata, not a condition for a payment.
+    d["reservation_status"] = {
             **dict.fromkeys(["ok", "valid", "platná", "platna"], "OK"),
             **dict.fromkeys(["cancelled", "canceled", "zrušeno"], "CANCELLED"),
-            **dict.fromkeys(["no-show", "noshow", "nedojezd"], "NO_SHOW"),
-        },
-    )
+            **dict.fromkeys(["no-show", "no_show", "noshow", "nedojezd"], "NO_SHOW"),
+        }.get(header(d.get("reservation_status")), d.get("reservation_status"))
     d["payment_status"] = enum(
         d["payment_status"],
         {
@@ -468,14 +467,13 @@ def booking(d):
         "IDENTITY_MISSING",
         "Chybí platná Booking reference nebo Payout ID.",
     )
-    for k in ("arrival", "departure", "payout_date"):
-        d[k] = parse_date(d[k]) if d[k] else None
+    for k in ("arrival", "departure"):
+        try:
+            d[k] = parse_date(d[k]) if d[k] else None
+        except AppError:
+            pass  # Preserve unreadable stay metadata without rejecting the payment.
+    d["payout_date"] = parse_date(d["payout_date"]) if d["payout_date"] else None
     require(d["payout_date"], "DATE_INVALID", "Chybí datum výplaty.")
-    require(
-        not (d["arrival"] and d["departure"]) or d["departure"] >= d["arrival"],
-        "DATE_INVALID",
-        "Odjezd předchází příjezdu.",
-    )
     d["currency"] = currency(d["currency"])
     d["signed_amount_minor"] = money(d["signed_amount_minor"])
     ident = digest(
@@ -503,6 +501,9 @@ def booking(d):
 
 
 def parse(raw, name, kind, sheet=None, cancel=None, progress=None):
+    if kind == "ACCOUNTS":
+        from kajovokarty.infrastructure.accounts_parser import parse_accounts
+        return parse_accounts(raw, name, sheet, cancel, progress)
     require(kind in SCHEMAS, "FORMAT_INVALID", "Neznámý zdroj.")
     candidates = []
     all_sheets = sheets(raw, name, kind)

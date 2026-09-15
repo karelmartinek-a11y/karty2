@@ -50,6 +50,7 @@ class AutoRun:
             (helper["published_generation_id"],),
         ).fetchone()
         return {
+            "accounts": c.execute("SELECT count(*) FROM account_symbol").fetchone()[0],
             "context": tuple(context) if context else None,
             "generation": tuple(generation) if generation else None,
             "domain": c.execute(

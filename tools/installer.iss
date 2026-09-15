@@ -1,4 +1,4 @@
-#define AppVersion "0.3.2"
+#define AppVersion "0.4.0"
 [Setup]
 AppId={{0C019C01-E185-4136-A617-6911EF6DBDAA}
 AppName=KájovoKarty

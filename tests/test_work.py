@@ -71,7 +71,11 @@ def test_immutable(work):
             c.execute("DELETE FROM financial_source")
 
 
-def test_auto_and_suppression(work):
+def test_auto_and_suppression(db):
+    from test_acceptance_traces import seed
+    seed(db, "CASHBOOK_CARD")
+    seed(db, "BANK_CARD")
+    work = WorkService(db)
     m = MatchingService(work.db, SettingsService(work.db))
     assert m.run()["created_groups"] == 1
     assert m.run()["created_groups"] == 0

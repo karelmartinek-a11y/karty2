@@ -33,8 +33,8 @@ class BackupService:
                 dest.close()
             raw = dbpath.read_bytes()
             manifest = {
-                "schema": 2,
-                "app_build": "0.3.2",
+                "schema": 3,
+                "app_build": "0.4.0",
                 "created_at": now(),
                 "files": {"database.sqlite": bytehash(raw)},
                 "secrets_included": False,
@@ -73,7 +73,7 @@ class BackupService:
                 manifest = json.loads(z.read("manifest.json"))
                 raw = z.read("database.sqlite")
                 require(
-                    manifest.get("schema") in (1, 2)
+                    manifest.get("schema") in (1, 2, 3)
                     and manifest.get("files", {}).get("database.sqlite")
                     == bytehash(raw),
                     "BACKUP_INVALID",
@@ -95,7 +95,7 @@ class BackupService:
             with candidate_db.connect() as candidate_connection:
                 require(
                     candidate_connection.execute("PRAGMA user_version").fetchone()[0]
-                    == 2,
+                    == 3,
                     "BACKUP_INVALID",
                     "Nepodporované schéma zálohy.",
                 )
@@ -104,7 +104,7 @@ class BackupService:
                 require(
                     c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
                     and not c.execute("PRAGMA foreign_key_check").fetchall()
-                    and c.execute("PRAGMA user_version").fetchone()[0] in (1, 2),
+                    and c.execute("PRAGMA user_version").fetchone()[0] in (1, 2, 3),
                     "BACKUP_INVALID",
                     "Obnovovaná databáze není platná.",
                 )
@@ -171,7 +171,7 @@ class BackupService:
             self.db.validate(c)
             info = {
                 "domain_invariants": "PASS",
-                "app_build": "0.3.2",
+                "app_build": "0.4.0",
                 "os": platform.system(),
                 "python": platform.python_version(),
                 "integrity": c.execute("PRAGMA quick_check").fetchone()[0],
