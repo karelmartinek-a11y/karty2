@@ -2,11 +2,29 @@ from __future__ import annotations
 from pathlib import Path
 import json, os, sqlite3, tempfile, zipfile, platform, re
 from kajovokarty.domain.core import AppError, bytehash, canonical, now, require, uid
+from kajovokarty.infrastructure.file_storage import publish_staged_file
 
 
 class BackupService:
     def __init__(self, db):
         self.db = db
+
+    def prune_daily(self, folder, cutoff, keep):
+        """Delete only verified old application archives, never arbitrary named ZIPs."""
+        from datetime import date
+        removed = []
+        for path in Path(folder).glob('auto-????-??-??.zip'):
+            if path == Path(keep) or path.is_symlink() or path.is_junction():
+                continue
+            try:
+                if date.fromisoformat(path.stem[5:]) >= cutoff:
+                    continue
+                self.inspect(path)
+            except (ValueError, AppError, OSError):
+                continue
+            path.unlink()
+            removed.append(path.name)
+        return removed
 
     def backup(self, target):
         target = Path(target)
@@ -33,8 +51,8 @@ class BackupService:
                 dest.close()
             raw = dbpath.read_bytes()
             manifest = {
-                "schema": 3,
-                "app_build": "0.4.0",
+                "schema": 4,
+                "app_build": "0.4.5",
                 "created_at": now(),
                 "files": {"database.sqlite": bytehash(raw)},
                 "secrets_included": False,
@@ -49,7 +67,7 @@ class BackupService:
                     "BACKUP_INVALID",
                     "Záloha se nepodařila ověřit.",
                 )
-            os.replace(tmp, target)
+            publish_staged_file(tmp, target)
             with self.db.transaction() as c:
                 self.db.audit(
                     c, "BACKUP_CREATED", after={"sha256": bytehash(target.read_bytes())}
@@ -71,9 +89,12 @@ class BackupService:
                     "Záloha překračuje 4 GiB.",
                 )
                 manifest = json.loads(z.read("manifest.json"))
+                require(isinstance(manifest, dict)
+                        and isinstance(manifest.get('files'), dict),
+                        'BACKUP_INVALID', 'Neplatný manifest zálohy.')
                 raw = z.read("database.sqlite")
                 require(
-                    manifest.get("schema") in (1, 2, 3)
+                    manifest.get("schema") in (1, 2, 3, 4)
                     and manifest.get("files", {}).get("database.sqlite")
                     == bytehash(raw),
                     "BACKUP_INVALID",
@@ -95,7 +116,7 @@ class BackupService:
             with candidate_db.connect() as candidate_connection:
                 require(
                     candidate_connection.execute("PRAGMA user_version").fetchone()[0]
-                    == 3,
+                    == 4,
                     "BACKUP_INVALID",
                     "Nepodporované schéma zálohy.",
                 )
@@ -104,7 +125,7 @@ class BackupService:
                 require(
                     c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
                     and not c.execute("PRAGMA foreign_key_check").fetchall()
-                    and c.execute("PRAGMA user_version").fetchone()[0] in (1, 2, 3),
+                    and c.execute("PRAGMA user_version").fetchone()[0] in (1, 2, 3, 4),
                     "BACKUP_INVALID",
                     "Obnovovaná databáze není platná.",
                 )
@@ -150,7 +171,7 @@ class BackupService:
             self.backup(self.db.path.parent / ("before-restore-" + uid() + ".zip"))
             with self.db.connect() as current:
                 current.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            os.replace(candidate, self.db.path)
+            publish_staged_file(candidate, self.db.path)
             for suffix in ("-wal", "-shm"):
                 Path(str(self.db.path) + suffix).unlink(missing_ok=True)
             with self.db.transaction() as c:
@@ -171,7 +192,7 @@ class BackupService:
             self.db.validate(c)
             info = {
                 "domain_invariants": "PASS",
-                "app_build": "0.4.0",
+                "app_build": "0.4.4",
                 "os": platform.system(),
                 "python": platform.python_version(),
                 "integrity": c.execute("PRAGMA quick_check").fetchone()[0],
@@ -215,6 +236,18 @@ class BackupService:
                             if not isinstance(event, dict):
                                 continue
                             clean = {}
+                            for key in ("event", "level", "rule_id", "state", "disposition", "exception_type"):
+                                value = event.get(key)
+                                if isinstance(value, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", value):
+                                    clean[key] = value
+                            for key in ("operation_id", "file_id", "source_id", "transaction_id"):
+                                value = event.get(key)
+                                if isinstance(value, str) and re.fullmatch(r"[a-f0-9]{32}", value):
+                                    clean[key] = value
+                            for key in ("row_start", "count"):
+                                value = event.get(key)
+                                if type(value) is int and 0 <= value <= 1e9:
+                                    clean[key] = value
                             if event.get("endpoint_template") in TEMPLATES:
                                 clean["endpoint_template"] = event["endpoint_template"]
                             for key in ("http_status", "elapsed_ms"):

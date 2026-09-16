@@ -34,9 +34,13 @@ def result_text(result):
             for reason, count in sorted(counts["reasons"].items())
         ]
     labels = {
-        "C_TERMINAL": "Terminál a pokladna podle dne a částky",
+        "A_CASH": "Storna pokladny do dvou kalendářních dnů",
+        "B_SUM": "Booking a pokladna podle součtu",
+        "C_SUM": "Terminál a pokladna podle součtu",
+        "C_TERMINAL": "Terminál a pokladna podle částky a pracovních dnů",
         "A": "Storno terminálu",
         "B": "Booking přes Účty a variabilní symbol",
+        "B_DATE": "Booking a pokladna podle data odjezdu a částky",
         "C_STRONG": "Banka se shodným VS",
         "C_WEAK": "Banka s ověřeným kontextem",
         "D": "Booking započtení",
@@ -44,7 +48,7 @@ def result_text(result):
     if result["groups_by_rule"]:
         lines += ["", "Vytvořené skupiny podle pravidla:"]
         lines += [
-            f"• {labels[rule]}: {count}"
+            f"• {labels.get(rule, rule)}: {count}"
             for rule, count in sorted(result["groups_by_rule"].items())
         ]
     lines += [
@@ -64,7 +68,7 @@ def show_result(parent, result, error=None):
     dialog.setWindowTitle("Výsledek automatického párování")
     dialog.resize(820, 650)
     layout = QVBoxLayout(dialog)
-    heading = QLabel(error.message if error else "Automatické párování dokončeno")
+    heading = QLabel(error.user_message if error else "Automatické párování dokončeno")
     heading.setWordWrap(True)
     layout.addWidget(heading)
     box = QPlainTextEdit()

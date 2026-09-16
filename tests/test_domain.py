@@ -40,7 +40,7 @@ def test_money_roundtrip(n):
     assert money(decimal_money(n)) == n
 
 
-def test_terminal_edges_match_duplicates_one_to_one_without_variable_symbol():
+def test_terminal_edges_do_not_choose_arbitrary_duplicate_pairs():
     cash = [
         {"id": "c1", "local_date": "2026-09-07", "currency": "EUR", "signed_amount_minor": 5000, "source_identity": "cash-1"},
         {"id": "c2", "local_date": "2026-09-07", "currency": "EUR", "signed_amount_minor": 5000, "source_identity": "cash-2"},
@@ -51,7 +51,8 @@ def test_terminal_edges_match_duplicates_one_to_one_without_variable_symbol():
         {"id": "b2", "local_date": "2026-09-07", "currency": "EUR", "signed_amount_minor": 5000, "source_identity": "bank-2"},
         {"id": "b3", "local_date": "2026-09-08", "currency": "EUR", "signed_amount_minor": 7000, "source_identity": "bank-3"},
     ]
-    assert terminal_edges(cash, bank) == [{"c1", "b1"}, {"c2", "b2"}]
+    assert len(terminal_edges(cash, bank)) == 4
+    assert isolated(terminal_edges(cash, bank)) == []
 
 
 def test_merge_enriches_null_projection_but_rejects_real_conflict():

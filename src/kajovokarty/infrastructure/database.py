@@ -4,6 +4,7 @@ from pathlib import Path
 import sqlite3, threading, time
 import os
 from weakref import WeakValueDictionary
+from kajovokarty.infrastructure.file_storage import publish_staged_file
 from kajovokarty.domain.core import (
     AppError,
     bytehash,
@@ -21,6 +22,9 @@ class Database:
 
     def __init__(self, path):
         self.path = Path(path)
+        from kajovokarty.infrastructure.technical_log import TechnicalLog
+        self.log = TechnicalLog(self.path.parent / "logs")
+        self.log.event("DATABASE_OPEN")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         key = os.path.normcase(str(self.path.resolve()))
         with self._gates_lock:
@@ -28,7 +32,7 @@ class Database:
         with self.connect() as c:
             version = c.execute("PRAGMA user_version").fetchone()[0]
             require(
-                version <= 3,
+                version <= 4,
                 "SCHEMA_NEWER",
                 "Databáze pochází z novější verze programu.",
             )
@@ -125,6 +129,22 @@ class Database:
                 except BaseException:
                     c.rollback()
                     raise
+            if version < 4:
+                if version == 3:
+                    self._migration_backup(c)
+                sql = (Path(__file__).parents[1] / "migrations/004.sql").read_text(encoding="utf-8")
+                try:
+                    c.executescript("BEGIN IMMEDIATE;\n" + sql)
+                    self._flatten_active_groups(c)
+                    c.execute(
+                        "INSERT OR REPLACE INTO schema_migration VALUES(4,?,?,?)",
+                        (now(), "0.4.5", bytehash(sql.encode())),
+                    )
+                    c.execute("PRAGMA user_version=4")
+                    c.commit()
+                except BaseException:
+                    c.rollback()
+                    raise
             require(
                 c.execute("PRAGMA quick_check").fetchone()[0] == "ok",
                 "DATABASE_INVALID",
@@ -132,7 +152,7 @@ class Database:
             )
 
     def _migration_backup(self, source):
-        import json, os, tempfile, zipfile
+        import json, tempfile, zipfile
 
         with tempfile.TemporaryDirectory(dir=self.path.parent) as folder:
             candidate = Path(folder) / "database.sqlite"
@@ -152,7 +172,7 @@ class Database:
             raw = candidate.read_bytes()
             manifest = {
                 "schema": source.execute("PRAGMA user_version").fetchone()[0],
-                "app_build": "0.3.2",
+                "app_build": "0.4.5",
                 "created_at": now(),
                 "files": {"database.sqlite": bytehash(raw)},
                 "secrets_included": False,
@@ -161,22 +181,77 @@ class Database:
             with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
                 z.writestr("database.sqlite", raw)
                 z.writestr("manifest.json", json.dumps(manifest))
-            os.replace(
+            publish_staged_file(
                 archive, self.path.parent / ("before-migration-" + str(source.execute("PRAGMA user_version").fetchone()[0]) + "-" + uid() + ".zip")
             )
+
+    def _flatten_active_groups(self, c):
+        """Convert legacy active group hierarchies to direct source membership."""
+        roots = [
+            r[0]
+            for r in c.execute(
+                "SELECT w.id FROM work_object w WHERE w.type='GROUP' AND w.lifecycle='ACTIVE' "
+                "AND NOT EXISTS(SELECT 1 FROM membership m WHERE m.child_id=w.id AND m.active=1)"
+            )
+        ]
+        for root in roots:
+            descendants = [
+                r[0]
+                for r in c.execute(
+                    "WITH RECURSIVE tree(id) AS (SELECT ? UNION ALL SELECT m.child_id FROM tree t JOIN membership m ON m.parent_id=t.id AND m.active=1) SELECT id FROM tree",
+                    (root,),
+                )
+            ]
+            nested = [
+                i for i in descendants
+                if i != root and c.execute("SELECT type FROM work_object WHERE id=?", (i,)).fetchone()[0] == "GROUP"
+            ]
+            if not nested:
+                continue
+            leaves = [
+                r[0]
+                for r in c.execute(
+                    "WITH RECURSIVE tree(id) AS (SELECT ? UNION ALL SELECT m.child_id FROM tree t JOIN membership m ON m.parent_id=t.id AND m.active=1) SELECT w.id FROM tree t JOIN work_object w ON w.id=t.id WHERE w.type='SOURCE'",
+                    (root,),
+                )
+            ]
+            command = uid()
+            position = c.execute("SELECT coalesce(max(history_position),0)+1 FROM command").fetchone()[0]
+            c.execute(
+                "INSERT INTO command VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (command, "FLATTEN_GROUP", "SYSTEM", "{}", "{}", "{}", "{}", "{}", "{}", None, "APPLIED", now(), position, 1),
+            )
+            marks = ",".join("?" for _ in descendants)
+            c.execute(
+                f"UPDATE membership SET active=0,ended_by_command=?,ended_at=? WHERE active=1 AND (parent_id IN ({marks}) OR child_id IN ({marks}))",
+                [command, now(), *descendants, *descendants],
+            )
+            for gid in nested:
+                c.execute("UPDATE work_object SET lifecycle='DISSOLVED',revision=revision+1 WHERE id=?", (gid,))
+            c.execute("UPDATE work_object SET revision=revision+1 WHERE id=?", (root,))
+            for leaf in leaves:
+                c.execute(
+                    "INSERT INTO membership VALUES(?,?,?,1,?,NULL,?,NULL)",
+                    (uid(), root, leaf, command, now()),
+                )
+            c.execute(
+                "UPDATE command SET after_json=?,expected_revisions_json=? WHERE id=?",
+                (canonical({root: {"children": leaves}}), canonical({"objects": {root: c.execute("SELECT revision FROM work_object WHERE id=?", (root,)).fetchone()[0]}}), command),
+            )
+            self.audit(c, "FLATTEN_GROUP", [root, *nested, *leaves], method="SYSTEM", command=command)
 
     @contextmanager
     def connect(self):
         c = sqlite3.connect(self.path, timeout=5, isolation_level=None)
-        c.row_factory = sqlite3.Row
-        c.create_function(
-            "kk_search_normalize", 1, search_normalize, deterministic=True
-        )
-        c.execute("PRAGMA foreign_keys=ON")
-        c.execute("PRAGMA journal_mode=WAL")
-        c.execute("PRAGMA synchronous=FULL")
-        c.execute("PRAGMA busy_timeout=5000")
         try:
+            c.row_factory = sqlite3.Row
+            c.create_function(
+                "kk_search_normalize", 1, search_normalize, deterministic=True
+            )
+            c.execute("PRAGMA foreign_keys=ON")
+            c.execute("PRAGMA journal_mode=WAL")
+            c.execute("PRAGMA synchronous=FULL")
+            c.execute("PRAGMA busy_timeout=5000")
             yield c
         finally:
             c.close()
@@ -210,6 +285,9 @@ class Database:
     @contextmanager
     def transaction(self):
         with self.operation_gate(), self.connect() as c:
+            transaction_id = uid()
+            started = time.monotonic()
+            self.log.event("TRANSACTION_BEGIN", transaction_id=transaction_id)
             try:
                 c.execute("BEGIN IMMEDIATE")
                 before = c.execute(
@@ -224,7 +302,9 @@ class Database:
                 ):
                     self.validate(c)
                 c.commit()
+                self.log.event("TRANSACTION_COMMIT", transaction_id=transaction_id, elapsed_ms=round((time.monotonic()-started)*1000))
             except sqlite3.OperationalError as e:
+                self.log.exception("TRANSACTION_ROLLBACK", e, transaction_id=transaction_id)
                 c.rollback()
                 if "locked" in str(e):
                     raise AppError(
@@ -233,7 +313,8 @@ class Database:
                 if "full" in str(e):
                     raise AppError("DISK_FULL", "Na disku není dostatek místa.") from e
                 raise
-            except BaseException:
+            except BaseException as e:
+                self.log.exception("TRANSACTION_ROLLBACK", e, transaction_id=transaction_id)
                 c.rollback()
                 raise
 
@@ -243,6 +324,12 @@ class Database:
         ).fetchone()
         require(
             not invalid, "GROUP_INVALID", "Aktivní skupina musí mít alespoň dvě děti."
+        )
+        nested = c.execute(
+            "SELECT 1 FROM membership m JOIN work_object child ON child.id=m.child_id WHERE m.active=1 AND child.type='GROUP' LIMIT 1"
+        ).fetchone()
+        require(
+            not nested, "GROUP_INVALID", "Skupina nesmí obsahovat jinou skupinu."
         )
         missing = c.execute(
             "SELECT f.id FROM financial_source f LEFT JOIN cashbook_detail a ON a.source_id=f.id LEFT JOIN bank_detail b ON b.source_id=f.id LEFT JOIN booking_detail k ON k.source_id=f.id LEFT JOIN work_object w ON w.source_id=f.id WHERE w.id IS NULL OR (f.kind='CASHBOOK_CARD' AND a.source_id IS NULL) OR (f.kind='BANK_CARD' AND b.source_id IS NULL) OR (f.kind='BOOKING' AND k.source_id IS NULL) LIMIT 1"
@@ -290,6 +377,8 @@ class Database:
             ),
         )
 
+        self.log.event(event, operation_id=operation, source_ids=list(refs), kind=method)
+
     def start_operation(self, kind):
         op = uid()
         with self.transaction() as c:
@@ -305,14 +394,14 @@ class Database:
             c.execute(
                 "UPDATE operation SET state=?,finished_at=?,safe_error_json=? WHERE id=?",
                 (
-                    "FAILED" if error else "COMPLETED",
+                    "CANCELLED" if error and error.code == "CANCELLED" else "FAILED" if error else "COMPLETED",
                     now(),
                     canonical(error.as_dict()) if error else None,
                     op,
                 ),
             )
             self.audit(
-                c, "OPERATION_FAILED" if error else "OPERATION_COMPLETED", operation=op
+                c, "OPERATION_CANCELLED" if error and error.code == "CANCELLED" else "OPERATION_FAILED" if error else "OPERATION_COMPLETED", operation=op
             )
 
     def invalidate_redo(self, c):

@@ -134,13 +134,13 @@ def test_api_cannot_make_requests():
     assert error.value.code == "API_REMOVED"
 
 
-def test_different_currency_and_missing_reference_stay_manual(db):
+def test_different_currency_stays_manual_but_missing_reference_allows_date_match(db):
     import_sample(db)
     add_references(db, [("20260001", "R1", "1234567890")])
     seed(db, "CASHBOOK_CARD", currency="CZK")
     seed(db, "CASHBOOK_CARD", vs="999999999", minute="01")
     seed(db, "BOOKING")
-    assert MatchingService(db, SettingsService(db)).run()["created_groups"] == 0
+    assert MatchingService(db, SettingsService(db)).run()['groups_by_rule'] == {'B_DATE': 1}
 
 
 def test_accounts_report_and_proof_export(db, tmp_path):

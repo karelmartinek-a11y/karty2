@@ -35,10 +35,10 @@ if not exist "%VENV_PYTHON%" (
 )
 
 echo Kontroluji a doplnuji zavislosti...
-"%VENV_PYTHON%" -m pip install --disable-pip-version-check --upgrade pip >nul
+"%VENV_PYTHON%" -m pip install --disable-pip-version-check --require-hashes -r requirements-dev.lock
 if errorlevel 1 goto :install_error
 
-"%VENV_PYTHON%" -m pip install --disable-pip-version-check --editable .
+"%VENV_PYTHON%" -m pip install --disable-pip-version-check --no-deps --no-build-isolation --editable .
 if errorlevel 1 goto :install_error
 
 echo Spoustim KajovoKarty...

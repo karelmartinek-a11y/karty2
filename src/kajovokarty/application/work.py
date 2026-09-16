@@ -200,7 +200,8 @@ class WorkService:
                 cmd,
             ),
         )
-        self.db.audit(c, kind, after.keys(), before, after, "MANUAL", cmd)
+        self.db.audit(c, kind, after.keys(), before, after,
+                      c.execute("SELECT method FROM command WHERE id=?", (cmd,)).fetchone()[0], cmd)
 
     def _check(self, objects, ids, revisions):
         require(
@@ -240,6 +241,11 @@ class WorkService:
             objects, groups, children, parents, sources = self._graph(c, ids)
             self._check(objects, ids, revisions)
             require(
+                all(objects[i]["type"] == "SOURCE" for i in ids),
+                "GROUP_INVALID",
+                "Skupiny mohou obsahovat pouze přímé platební položky.",
+            )
+            require(
                 all(i not in parents for i in ids),
                 "ALREADY_OWNED",
                 "Vybraný objekt již má rodiče.",
@@ -258,9 +264,12 @@ class WorkService:
                     "Vyřízená skupina se nesmí znovu seskupit.",
                 )
                 leaves.extend(ls)
+            require(method != "AUTO" or (len(ids) == 2 and len(leaves) == 2)
+                    or (auto_context is not None and (evidence or {}).get('rule_id') in ('B_SUM', 'C_SUM')),
+                    "AUTO_GROUP_FORBIDDEN", "Součtová skupina vyžaduje ověřený běh automatiky.")
             diff = self._difference(leaves, sources)
             require(
-                not require_zero or diff == 0,
+                not (require_zero or method == 'AUTO') or diff == 0,
                 "NONZERO_DIFFERENCE",
                 "Výběr není přesně vyrovnaný.",
             )
@@ -296,6 +305,11 @@ class WorkService:
             objects, groups, children, parents, sources = self._graph(c, [gid, *ids])
             allids = [gid, *ids]
             self._check(objects, allids, revisions)
+            require(
+                all(objects[i]["type"] == "SOURCE" for i in ids),
+                "GROUP_INVALID",
+                "Skupiny mohou obsahovat pouze přímé platební položky.",
+            )
             require(
                 gid in groups and all(i not in parents for i in allids),
                 "ALREADY_OWNED",
@@ -742,6 +756,42 @@ class WorkService:
                     r["id"],
                 )
             )
+            return result
+
+    def candidates(self, object_id, revision, include_paired=False):
+        """Return same-currency roots ranked by amount/date proximity."""
+        from datetime import date
+        with self.db.connect() as c:
+            c.execute("BEGIN")
+            rows = self.query({"status": "all"}, page_size=0, _connection=c)["rows"]
+            anchor = next((r for r in rows if r["id"] == object_id), None)
+            require(anchor and anchor["revision"] == revision, "STALE_STATE", "Výchozí objekt se změnil. Obnovte pohled.")
+            anchor_amount = anchor["amount"]
+            anchor_date = anchor.get("date")
+            try:
+                anchor_day = date.fromisoformat(anchor_date) if anchor_date else None
+            except ValueError:
+                anchor_day = None
+            result = []
+            for r in rows:
+                if r["id"] == object_id or r.get("parent_id"):
+                    continue
+                if not include_paired and r.get("resolved"):
+                    continue
+                if r.get("currency") != anchor.get("currency"):
+                    continue
+                amount_delta = abs(abs(r["amount"]) - abs(anchor_amount))
+                exact = amount_delta == 0
+                try:
+                    day = date.fromisoformat(r["date"]) if r.get("date") else None
+                    date_delta = abs((day - anchor_day).days) if day and anchor_day else 10**9
+                except ValueError:
+                    date_delta = 10**9
+                result.append({**r, "candidate_amount_delta": amount_delta,
+                               "candidate_date_delta": date_delta,
+                               "candidate_exact_amount": exact})
+            result.sort(key=lambda r: (not r["candidate_exact_amount"], r["candidate_amount_delta"],
+                                       r["candidate_date_delta"], r.get("kinds", [""]), r["id"]))
             return result
 
     def evidence(self, gid, _connection=None):

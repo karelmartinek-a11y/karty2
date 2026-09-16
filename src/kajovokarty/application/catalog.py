@@ -9,9 +9,17 @@ class CatalogService:
         self.db = db
 
     def import_detail(self, run_id, file_id):
+        if file_id is None:
+            with self.db.connect() as c:
+                row = c.execute("SELECT row_counts_json FROM import_run WHERE id=?", (run_id,)).fetchone()
+            require(row, "QUERY_INVALID", "Import nebyl nalezen.")
+            from kajovokarty.application.import_batch import file_text
+            counts = json.loads(row[0])
+            require(counts.get("import_result"), "QUERY_INVALID", "Výsledek není dostupný.")
+            return counts.get("batch_summary") or file_text(counts["import_result"])
         with self.db.connect() as c:
             row = c.execute(
-                "SELECT i.original_name,o.state,r.row_counts_json FROM import_file i JOIN operation o ON o.id=i.run_id JOIN import_run r ON r.id=i.run_id WHERE i.run_id=? AND i.file_id=?",
+                "SELECT i.original_name,i.counters_json,o.state,r.parser_version,r.row_counts_json FROM import_file i JOIN operation o ON o.id=i.run_id JOIN import_run r ON r.id=i.run_id WHERE i.run_id=? AND i.file_id=?",
                 (run_id, file_id),
             ).fetchone()
             require(row, "QUERY_INVALID", "Import nebyl nalezen.")
@@ -20,7 +28,14 @@ class CatalogService:
                 (run_id, file_id),
             )]
         counts = json.loads(row["row_counts_json"])
+        if row["parser_version"] == "KK-IMPORT-2":
+            per_file = json.loads(row["counters_json"])
+            counts.update(new=per_file.get("NEW", per_file.get("new", 0)),
+                          known=per_file.get("KNOWN", per_file.get("known", 0)))
         from kajovokarty.application.import_messages import file_text, reason
+        if counts.get("import_result"):
+            from kajovokarty.application.import_batch import file_text as import_file_text
+            return counts.get("batch_summary") or import_file_text(counts["import_result"])
         if counts.get("booking_result"):
             return file_text(counts["booking_result"])
         lines = [row["original_name"]]
@@ -38,7 +53,7 @@ class CatalogService:
     def rows(self, kind):
         queries = {
             "generations": "SELECT id,context_id,kind,state,published_at FROM helper_generation WHERE state='PUBLISHED' ORDER BY published_at DESC",
-            "imports": "SELECT i.run_id,i.file_id,i.original_name,i.sheet_name,i.input_mode,i.authoritative_snapshot_hash AS sha256,o.started_at,o.state,i.counters_json,r.row_counts_json,r.selected_sources_json FROM import_file i JOIN operation o ON o.id=i.run_id JOIN import_run r ON r.id=i.run_id ORDER BY o.started_at DESC",
+            "imports": "SELECT r.id AS run_id,i.file_id,coalesce(i.original_name,json_extract(r.row_counts_json,'$.import_result.name'),'Soubor') AS original_name,i.sheet_name,i.input_mode,i.authoritative_snapshot_hash AS sha256,o.started_at,o.state,coalesce(i.counters_json,'{}') AS counters_json,r.parser_version,r.row_counts_json,r.selected_sources_json FROM import_run r JOIN operation o ON o.id=r.id LEFT JOIN import_file i ON i.run_id=r.id ORDER BY o.started_at DESC",
             "audit": "SELECT id,timestamp,type,method,object_refs_json,before_json,after_json FROM audit_event ORDER BY timestamp DESC",
             "operations": "SELECT id,type,state,started_at,finished_at FROM operation ORDER BY started_at DESC",
             "compatibility": "SELECT r.id,r.status,r.started_at,r.range_start,r.range_end,coalesce(json_extract(o.recovery_json,'$.evidence_class'),'UNKNOWN') AS evidence_class FROM api_compatibility_run r JOIN operation o ON o.id=r.id ORDER BY r.started_at DESC",
@@ -49,9 +64,16 @@ class CatalogService:
         if kind == "imports":
             for row in rows:
                 counts = json.loads(row.pop("row_counts_json"))
+                if row.pop("parser_version") == "KK-IMPORT-2":
+                    per_file = json.loads(row["counters_json"])
+                    counts.update(new=per_file.get("NEW", per_file.get("new", 0)),
+                                  known=per_file.get("KNOWN", per_file.get("known", 0)))
                 kinds = json.loads(row.pop("selected_sources_json"))
                 row["status_label"] = {"COMPLETED": "Zpracováno", "FAILED": "Nepodařilo se načíst", "CANCELLED": "Nenačteno", "RUNNING": "Probíhá načítání", "INTERRUPTED": "Přerušeno"}.get(row["state"], "Nedokončeno")
-                if counts.get("booking_result"):
+                if counts.get("import_result"):
+                    from kajovokarty.application.import_batch import file_text as import_file_text
+                    row["result_text"] = import_file_text(counts["import_result"])
+                elif counts.get("booking_result"):
                     report = counts["booking_result"]
                     row["result_text"] = f"Načtené platby: {report['added']}. Již uložené platby: {report['already_saved']}."
                     if report["state"] != "COMPLETED":

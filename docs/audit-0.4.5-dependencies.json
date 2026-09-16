@@ -1,0 +1,258 @@
+{
+  "checked_at": "2026-09-16T17:21:06.350777+00:00",
+  "packages": [
+    {
+      "name": "altgraph",
+      "version": "0.17.5",
+      "source": "https://pypi.org/pypi/altgraph/0.17.5/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "anyio",
+      "version": "4.15.1",
+      "source": "https://pypi.org/pypi/anyio/4.15.1/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "attrs",
+      "version": "26.1.0",
+      "source": "https://pypi.org/pypi/attrs/26.1.0/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "certifi",
+      "version": "2026.7.22",
+      "source": "https://pypi.org/pypi/certifi/2026.7.22/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "chardet",
+      "version": "7.6.0",
+      "source": "https://pypi.org/pypi/chardet/7.6.0/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "colorama",
+      "version": "0.4.6",
+      "source": "https://pypi.org/pypi/colorama/0.4.6/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "et-xmlfile",
+      "version": "2.0.0",
+      "source": "https://pypi.org/pypi/et-xmlfile/2.0.0/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "h11",
+      "version": "0.16.0",
+      "source": "https://pypi.org/pypi/h11/0.16.0/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "httpcore",
+      "version": "1.0.9",
+      "source": "https://pypi.org/pypi/httpcore/1.0.9/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "httpx",
+      "version": "0.28.1",
+      "source": "https://pypi.org/pypi/httpx/0.28.1/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "hypothesis",
+      "version": "6.131.9",
+      "source": "https://pypi.org/pypi/hypothesis/6.131.9/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "idna",
+      "version": "3.19",
+      "source": "https://pypi.org/pypi/idna/3.19/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "iniconfig",
+      "version": "2.3.0",
+      "source": "https://pypi.org/pypi/iniconfig/2.3.0/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "macholib",
+      "version": "1.16.4",
+      "source": "https://pypi.org/pypi/macholib/1.16.4/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "openpyxl",
+      "version": "3.1.5",
+      "source": "https://pypi.org/pypi/openpyxl/3.1.5/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "packaging",
+      "version": "26.3",
+      "source": "https://pypi.org/pypi/packaging/26.3/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "pefile",
+      "version": "2023.2.7",
+      "source": "https://pypi.org/pypi/pefile/2023.2.7/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "pillow",
+      "version": "12.3.0",
+      "source": "https://pypi.org/pypi/pillow/12.3.0/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "pluggy",
+      "version": "1.6.0",
+      "source": "https://pypi.org/pypi/pluggy/1.6.0/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "pygments",
+      "version": "2.21.0",
+      "source": "https://pypi.org/pypi/pygments/2.21.0/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "pyinstaller",
+      "version": "6.13.0",
+      "source": "https://pypi.org/pypi/pyinstaller/6.13.0/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "pyinstaller-hooks-contrib",
+      "version": "2026.7",
+      "source": "https://pypi.org/pypi/pyinstaller-hooks-contrib/2026.7/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "pyside6",
+      "version": "6.8.3",
+      "source": "https://pypi.org/pypi/pyside6/6.8.3/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "pyside6-addons",
+      "version": "6.8.3",
+      "source": "https://pypi.org/pypi/pyside6-addons/6.8.3/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "pyside6-essentials",
+      "version": "6.8.3",
+      "source": "https://pypi.org/pypi/pyside6-essentials/6.8.3/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "pytest",
+      "version": "9.0.3",
+      "source": "https://pypi.org/pypi/pytest/9.0.3/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "pywin32-ctypes",
+      "version": "0.2.3",
+      "source": "https://pypi.org/pypi/pywin32-ctypes/0.2.3/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "reportlab",
+      "version": "4.3.1",
+      "source": "https://pypi.org/pypi/reportlab/4.3.1/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "ruff",
+      "version": "0.11.5",
+      "source": "https://pypi.org/pypi/ruff/0.11.5/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "setuptools",
+      "version": "83.0.0",
+      "source": "https://pypi.org/pypi/setuptools/83.0.0/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "shiboken6",
+      "version": "6.8.3",
+      "source": "https://pypi.org/pypi/shiboken6/6.8.3/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "sortedcontainers",
+      "version": "2.4.0",
+      "source": "https://pypi.org/pypi/sortedcontainers/2.4.0/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "typing-extensions",
+      "version": "4.16.0",
+      "source": "https://pypi.org/pypi/typing-extensions/4.16.0/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "tzdata",
+      "version": "2025.2",
+      "source": "https://pypi.org/pypi/tzdata/2025.2/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "wheel",
+      "version": "0.46.2",
+      "source": "https://pypi.org/pypi/wheel/0.46.2/json",
+      "vulnerabilities": [],
+      "yanked": false
+    },
+    {
+      "name": "xlrd",
+      "version": "2.0.1",
+      "source": "https://pypi.org/pypi/xlrd/2.0.1/json",
+      "vulnerabilities": [],
+      "yanked": false
+    }
+  ],
+  "scope": "PyPI advisories for locked Python packages; not a native DLL security audit"
+}

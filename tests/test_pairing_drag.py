@@ -25,6 +25,22 @@ def revisions(work, ids):
         }
 
 
+def test_transfer_hydrates_all_sources_and_rejects_stale_batch(db):
+    ids, pairing, work = context(db)
+    rows = work.query({'status': 'all'}, page_size=0)['rows']
+    payload = [{k: r[k] for k in ('id', 'revision', 'currency')} for r in rows]
+    hydrated = pairing.resolve_draft_rows(payload)
+    for row in hydrated:
+        original = next(r for r in rows if r['id'] == row['id'])
+        for key in ('kinds', 'date', 'amount', 'currency', 'primary_identifier', 'description'):
+            assert row[key] == original[key]
+    payload[-1]['revision'] += 1
+    with pytest.raises(AppError) as error:
+        pairing.resolve_draft_rows(payload)
+    assert error.value.code == 'STALE_STATE'
+    assert work.query({'status': 'all'}, page_size=0)['total'] == len(ids)
+
+
 def test_drop_create_edit_resolved_detach_collapse_and_undo(db):
     (cash, bank, extra, booking), pairing, work = context(db)
     first = pairing.move(
@@ -130,16 +146,13 @@ def test_stale_parent_and_self_drop_have_no_partial_effect(db):
     assert e.value.code == "CYCLE_DETECTED"
 
 
-def test_group_to_unpair_zone_preserves_nested_group(db):
+def test_nested_group_is_rejected(db):
     ids, pairing, work = context(db)
     a, b, c, d = ids
     sub = work.create_group([b, c], revisions(work, [b, c]))["id"]
-    root = work.create_group([a, sub, d], revisions(work, [a, sub, d]))["id"]
-    result = pairing.move([root], revisions(work, [root]))
-    assert set(work.query({"status": "all"}, page_size=0)["ids"]) == {a, sub, d}
+    with pytest.raises(AppError, match="přímé platební"):
+        work.create_group([a, sub, d], revisions(work, [a, sub, d]))
     assert set(work.evidence(sub)["children"]) == {b, c}
-    work.undo(result["command_id"])
-    assert set(work.evidence(root)["children"]) == {a, sub, d}
 
 
 def test_transaction_failure_rolls_back_transfer(db, monkeypatch):

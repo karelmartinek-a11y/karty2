@@ -1,3 +1,5 @@
+> Historický dokument; aktuální pravidla a výsledky jsou v [SSOT](SSOT.md) a [auditu 0.4.5](AUDIT_0_4_5.md). Níže zachovaný obsah popisuje tehdejší stav.
+
 # Forenzní revize automatického párování — 0.3.1
 
 Výchozí stav: `karelmartinek-a11y/karty2`, commit `491dbd46dd8b14cc126fa48ed21f1553fa285673`, navazující na PR #1. Rozsah: automatika A → B → C_STRONG → C_WEAK → D, její dokladové důkazy, výhradní běh, zápis skupin, zrušení/chyba, výsledky a vstup z UI. Reference KajovoVydaje2 se v této revizi nemění. Databázové schéma zůstává 2; SSOT pravidla automatického párování se nerozvolňují.

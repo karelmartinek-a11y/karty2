@@ -28,16 +28,14 @@ def create(work, rows):
     )
 
 
-def test_tree(work):
+def test_groups_are_flat(work):
     rs = choose(work, 3)
     g = create(work, rs[:2])
     rows = work.query(page_size=0)["rows"]
     sub = next(r for r in rows if r["id"] == g["id"])
     third = next(r for r in rows if r["id"] == rs[2]["id"])
-    parent = create(work, [sub, third])
-    e = work.evidence(parent["id"])
-    assert len(e["leaves"]) == 3
-    work.dissolve(parent["id"], e["object"]["revision"])
+    with pytest.raises(AppError, match="přímé platební"):
+        create(work, [sub, third])
     assert len(work.evidence(g["id"])["leaves"]) == 2
     assert g["id"] in work.query(page_size=0)["ids"]
 

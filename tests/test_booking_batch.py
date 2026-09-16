@@ -1,12 +1,10 @@
 import csv
 import io
-import json
 import os
 import threading
 
-from PySide6.QtCore import QTimer
 from PySide6.QtGui import QFontDatabase
-from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QFileDialog, QPlainTextEdit
+from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QPlainTextEdit
 
 from kajovokarty.application.booking_import import BookingImportService
 from kajovokarty.application.catalog import CatalogService
@@ -96,7 +94,7 @@ def test_bad_row_blocks_only_its_file_and_explains_count(db, fixtures, tmp_path)
     assert "ani jeho ostatní řádky" in batch_text(reports)
 
 
-def test_picker_multiple_csv_one_confirmation_and_readable_result(db, fixtures, tmp_path, monkeypatch):
+def test_picker_multiple_csv_automatic_import_and_readable_result(db, fixtures, tmp_path, monkeypatch):
     app = QApplication.instance() or QApplication([])
     QFontDatabase.addApplicationFont(str(fixtures.parent / "src/kajovokarty/assets/DejaVuSans.ttf"))
     first = csv_file(fixtures, tmp_path, "leden.csv", lambda r: r[:2])
@@ -109,21 +107,15 @@ def test_picker_multiple_csv_one_confirmation_and_readable_result(db, fixtures, 
         choices.append(args)
         return [str(first), str(second)], "Booking CSV (*.csv)"
     monkeypatch.setattr(QFileDialog, "getOpenFileNames", pick)
-    confirmations = []
-    def approve():
-        dialog = window.findChild(QDialog, "bookingImportQueue")
-        confirmations.append(dialog.findChild(QPlainTextEdit).toPlainText())
-        dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.Ok).click()
-    QTimer.singleShot(0, approve)
     try:
         window.choose_import("BOOKING")
-        spin(lambda: not window.jobs and window.findChild(QDialog, "bookingImportResult") is not None)
-        assert len(confirmations) == 1 and len(choices) == 1
+        spin(lambda: not window.jobs and window.import_dialog.completed)
+        assert len(choices) == 1
         assert "Booking CSV (*.csv)" in choices[0]
-        result = window.findChild(QDialog, "bookingImportResult")
+        result = window.findChild(QDialog, "importProgressDialog")
         text = result.findChild(QPlainTextEdit).toPlainText()
-        assert "Načtené platby celkem: 3" in text and "unor.csv" in text
-        assert "Podruhé jsme je neukládali" in text
+        assert "nově uloženo: 3" in text and "unor.csv" in text
+        assert "již uložené: 1" in text
         if os.environ.get("BOOKING_BATCH_SCREENSHOT"):
             result.grab().save(os.environ["BOOKING_BATCH_SCREENSHOT"])
         result.close()

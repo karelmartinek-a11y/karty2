@@ -1,3 +1,5 @@
+> Historický dokument; aktuální pravidla a výsledky jsou v [SSOT](SSOT.md) a [auditu 0.4.5](AUDIT_0_4_5.md). Níže zachovaný obsah popisuje tehdejší stav.
+
 > Historický protokol verze 0.2.0. Aktuální změny a nové ověření 0.3.0: [UI_WORKFLOW.md](UI_WORKFLOW.md).
 
 # Ověřovací protokol — KájovoKarty 0.2.0

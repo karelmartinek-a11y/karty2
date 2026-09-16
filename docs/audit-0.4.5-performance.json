@@ -1,0 +1,126 @@
+{
+  "platform": "Windows-10-10.0.19045-SP0",
+  "python": "3.12.9",
+  "probes": [
+    {
+      "name": "cash_reversals_no_match",
+      "size": 100,
+      "samples_seconds": [
+        0.004918999969959259,
+        0.004275700019206852,
+        0.0025588999851606786
+      ],
+      "median_seconds": 0.004275700019206852
+    },
+    {
+      "name": "cash_reversals_no_match",
+      "size": 500,
+      "samples_seconds": [
+        0.08399309997912496,
+        0.09626769996248186,
+        0.08579290000488982
+      ],
+      "median_seconds": 0.08579290000488982
+    },
+    {
+      "name": "cash_reversals_no_match",
+      "size": 1000,
+      "samples_seconds": [
+        0.36634910001885146,
+        0.36362540000118315,
+        0.5025878000305966
+      ],
+      "median_seconds": 0.36634910001885146
+    },
+    {
+      "name": "sum_candidates_balanced",
+      "size": 20,
+      "samples_seconds": [
+        0.000741399999242276,
+        0.0005864000413566828,
+        0.0005824999534524977
+      ],
+      "median_seconds": 0.0005864000413566828
+    },
+    {
+      "name": "sum_candidates_balanced",
+      "size": 40,
+      "samples_seconds": [
+        0.0021738000214099884,
+        0.009069200023077428,
+        0.002662800019606948
+      ],
+      "median_seconds": 0.002662800019606948
+    },
+    {
+      "name": "sum_candidates_balanced",
+      "size": 80,
+      "samples_seconds": [
+        0.013232600002083927,
+        0.006674800009932369,
+        0.013611999980639666
+      ],
+      "median_seconds": 0.013232600002083927
+    },
+    {
+      "name": "query_first_page",
+      "size": 100,
+      "samples_seconds": [
+        0.025485799997113645,
+        0.02327760000480339,
+        0.022765300003811717
+      ],
+      "median_seconds": 0.02327760000480339
+    },
+    {
+      "name": "hydrate_50_rows",
+      "size": 100,
+      "samples_seconds": [
+        0.021727200015448034,
+        0.019532999955117702,
+        0.0211175000295043
+      ],
+      "median_seconds": 0.0211175000295043
+    },
+    {
+      "name": "query_first_page",
+      "size": 1000,
+      "samples_seconds": [
+        0.08692189998691902,
+        0.08998519997112453,
+        0.09045670001069084
+      ],
+      "median_seconds": 0.08998519997112453
+    },
+    {
+      "name": "hydrate_50_rows",
+      "size": 1000,
+      "samples_seconds": [
+        0.018310799961909652,
+        0.020083900017198175,
+        0.020045400015078485
+      ],
+      "median_seconds": 0.020045400015078485
+    },
+    {
+      "name": "query_first_page",
+      "size": 5000,
+      "samples_seconds": [
+        0.3899161999579519,
+        0.39692339999601245,
+        0.4846926999744028
+      ],
+      "median_seconds": 0.39692339999601245
+    },
+    {
+      "name": "hydrate_50_rows",
+      "size": 5000,
+      "samples_seconds": [
+        0.025957399979233742,
+        0.02294860000256449,
+        0.020802199956960976
+      ],
+      "median_seconds": 0.02294860000256449
+    }
+  ]
+}

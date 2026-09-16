@@ -1,6 +1,7 @@
 """Strict file adapters; original bytes and every physical row are retained."""
 
 from __future__ import annotations
+from kajovokarty.domain.import_progress import notify
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -56,6 +57,7 @@ class Parsed:
     diagnostics: list = field(default_factory=list)
     counters: dict = field(default_factory=dict)
     accounts: list = field(default_factory=list)
+    account_outcomes: list = field(default_factory=list)
 
 
 def safe_raw(v):
@@ -467,11 +469,15 @@ def booking(d):
         "IDENTITY_MISSING",
         "Chybí platná Booking reference nebo Payout ID.",
     )
-    for k in ("arrival", "departure"):
-        try:
-            d[k] = parse_date(d[k]) if d[k] else None
-        except AppError:
-            pass  # Preserve unreadable stay metadata without rejecting the payment.
+    try:
+        d["arrival"] = parse_date(d["arrival"]) if d["arrival"] else None
+    except AppError:
+        pass  # Arrival remains optional descriptive metadata.
+    try:
+        d["departure"] = parse_date(d["departure"]) if d["departure"] else None
+    except AppError:
+        raise AppError("BOOKING_CHECKOUT_INVALID", "Chybí platné datum odjezdu.") from None
+    require(d["departure"], "BOOKING_CHECKOUT_INVALID", "Chybí platné datum odjezdu.")
     d["payout_date"] = parse_date(d["payout_date"]) if d["payout_date"] else None
     require(d["payout_date"], "DATE_INVALID", "Chybí datum výplaty.")
     d["currency"] = currency(d["currency"])
@@ -532,10 +538,11 @@ def parse(raw, name, kind, sheet=None, cancel=None, progress=None):
     footer = False
     income = expense = raw_sum = count = 0
     footer_values = None
-    for start, end, original in rows:
+    data_rows = [r for r in rows if r[0] > first[0]]
+    notify(progress, "Kontrola", 0, len(data_rows))
+    for index, (start, end, original) in enumerate(data_rows):
         require(not (cancel and cancel.is_set()), "CANCELLED", "Import byl zrušen.")
-        if progress and start % 100 == 0:
-            progress(f"{name}: řádek {start} / {len(rows)}")
+        notify(progress, "Kontrola", index, len(data_rows))
         if start <= first[0]:
             continue
         cells = list(original)
@@ -552,8 +559,8 @@ def parse(raw, name, kind, sheet=None, cancel=None, progress=None):
                 if kind == "CASHBOOK_CARD" and len(cells) == 12:
                     require(
                         mapping == CASH_FIELDS
-                        and str(cells[4]).strip() == "H&amp"
-                        and str(cells[5]).strip() == "H security s.r.o."
+                        and str(cells[4]).rstrip().endswith("&amp")
+                        and bool(str(cells[5]).strip())
                         and str(cells[8]).strip() in ("CZK", "EUR")
                         and str(cells[9]).strip() in ("Kartou", "Hotově", "Převodem")
                         and isinstance(cells[11], str),
@@ -696,4 +703,5 @@ def parse(raw, name, kind, sheet=None, cancel=None, progress=None):
             result.diagnostics.append(
                 dict(severity="ERROR", code="MONEY_INVALID", message="Neplatný footer.")
             )
+    notify(progress, "Kontrola", len(data_rows), len(data_rows))
     return result

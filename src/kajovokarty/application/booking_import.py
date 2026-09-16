@@ -39,8 +39,12 @@ class BookingImportService:
             reports.append(report)
             if preview:
                 # Store the same readable report for later inspection in Importy.
-                with self.db.transaction() as c:
-                    counts = json.loads(c.execute("SELECT row_counts_json FROM import_run WHERE id=?", (preview.id,)).fetchone()[0])
-                    counts["booking_result"] = report
-                    c.execute("UPDATE import_run SET row_counts_json=? WHERE id=?", (canonical(counts), preview.id))
+                try:
+                    with self.db.transaction() as c:
+                        counts = json.loads(c.execute("SELECT row_counts_json FROM import_run WHERE id=?", (preview.id,)).fetchone()[0])
+                        counts["booking_result"] = report
+                        c.execute("UPDATE import_run SET row_counts_json=? WHERE id=?", (canonical(counts), preview.id))
+                except Exception as error:
+                    self.db.log.exception("IMPORT_REPORT_FAILED", error, operation_id=preview.id)
+                    report.setdefault("warnings", []).append(reason({"code": "IMPORT_REPORT_FAILED"}))
         return reports

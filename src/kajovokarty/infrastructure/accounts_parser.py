@@ -1,5 +1,6 @@
 """Read only the three identifying columns of BetterHotel's account XLS export."""
 
+from kajovokarty.domain.import_progress import notify
 import io
 import struct
 import xlrd
@@ -35,13 +36,15 @@ def parse_accounts(raw, name, sheet=None, cancel=None, progress=None):
         sh, first, mapping = candidates[0]
         result = Parsed(sh.name, mapping)
         result.counters = {"incomplete": 0, "complete": 0}
+        notify(progress, "Kontrola", 0, sh.nrows - first - 1)
         for ri in range(first + 1, sh.nrows):
             require(not (cancel and cancel.is_set()), "CANCELLED", "Import byl zrušen.")
-            if progress and ri % 100 == 0:
-                progress(f"Účty: řádek {ri + 1} / {sh.nrows}")
+            notify(progress, "Kontrola", ri - first - 1, sh.nrows - first - 1)
             cells = {k: sh.cell(ri, col) if col < sh.row_len(ri) else None for k, col in mapping.items()}
             if any(cell is None or not str(cell.value).strip() for cell in cells.values()):
                 result.counters["incomplete"] += 1
+                result.diagnostics.append(dict(severity="WARNING", code="ACCOUNTS_INCOMPLETE",
+                    row_start=ri+1, row_end=ri+1, message="Řádek nemá všechna tři potřebná označení a byl vynechán."))
                 continue
             require(all(cell.ctype in (xlrd.XL_CELL_TEXT, xlrd.XL_CELL_NUMBER) for cell in cells.values()),
                     "FORMAT_INVALID", "Identifikátor v Účtech musí být text nebo celé číslo.")
@@ -52,6 +55,7 @@ def parse_accounts(raw, name, sheet=None, cancel=None, progress=None):
         if log.getvalue():
             result.diagnostics.append(dict(severity="WARNING", code="XLS_COMPATIBILITY",
                 message="XLS byl načten v kompatibilním režimu.", details={"reader": log.getvalue()}))
+        notify(progress, "Kontrola", sh.nrows - first - 1, sh.nrows - first - 1)
         return result
     except (xlrd.XLRDError, IndexError, struct.error) as e:
         raise AppError("FORMAT_INVALID", "Účty XLS nelze úplně načíst.") from e

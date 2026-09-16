@@ -141,7 +141,7 @@ def test_v1_migration_creates_verified_backup(tmp_path, fixtures):
     c.close()
     migrated = Database(path)
     with migrated.connect() as c:
-        assert c.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert c.execute("PRAGMA user_version").fetchone()[0] == 4
     archives = list(tmp_path.glob("before-migration*.zip"))
     assert len(archives) == 1
     with zipfile.ZipFile(archives[0]) as z:
@@ -210,7 +210,7 @@ def test_diagnostic_sanitizes_technical_logs(db, tmp_path):
     import zipfile, json
 
     folder = db.path.parent / "logs"
-    folder.mkdir()
+    folder.mkdir(exist_ok=True)
     (folder / "2026-09-10.jsonl").write_text(
         json.dumps(
             {

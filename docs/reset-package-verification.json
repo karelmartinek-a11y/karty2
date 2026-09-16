@@ -1,0 +1,12 @@
+{
+  "packaged_modules_match_source": [
+    "kajovokarty",
+    "kajovokarty.application.reset",
+    "kajovokarty.bootstrap.main",
+    "kajovokarty.ui.settings_dialog",
+    "kajovokarty.ui.main",
+    "kajovokarty.domain.errors"
+  ],
+  "version": "0.4.2",
+  "exe_sha256": "fb3f4778ec0957a3b21e026916c0fc3c4390a74c731ef55d16422bec1e4e641a"
+}

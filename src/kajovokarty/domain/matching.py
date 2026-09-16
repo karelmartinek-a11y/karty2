@@ -68,9 +68,9 @@ def bank_edges(
                 or days(a["local_date"], b["local_date"]) > window
             ):
                 continue
-            vs = a["payload"].get("variable_symbol")
+            vs = a.get("payload", {}).get("variable_symbol")
             bankvs = {
-                b["payload"].get(k) for k in ("variable_symbol", "variable_symbol_2")
+                b.get("payload", {}).get(k) for k in ("variable_symbol", "variable_symbol_2")
             } - {None, ""}
             if vs and bankvs and vs not in bankvs:
                 continue
@@ -81,20 +81,20 @@ def bank_edges(
 
 
 def terminal_edges(cash, bank, pulse=None, track=None):
-    """Pair cashbook and terminal entries by exact day, currency and amount."""
-    grouped_cash = defaultdict(list)
+    """Enumerate every plausible pair; isolation, never ordering, selects a match."""
     grouped_bank = defaultdict(list)
-    for row in cash:
-        grouped_cash[(row["local_date"], row["currency"], row["signed_amount_minor"])].append(row)
     for row in bank:
         grouped_bank[(row["local_date"], row["currency"], row["signed_amount_minor"])].append(row)
     edges = []
-    for key in sorted(set(grouped_cash) & set(grouped_bank)):
-        left = sorted(grouped_cash[key], key=lambda r: r["source_identity"])
-        right = sorted(grouped_bank[key], key=lambda r: r["source_identity"])
-        for a, b in zip(left, right):
+    for a in track(cash) if track else cash:
+        key = (a["local_date"], a["currency"], a["signed_amount_minor"])
+        for b in grouped_bank[key]:
             if pulse:
                 pulse()
+            vs = a.get("payload", {}).get("variable_symbol")
+            bankvs = {b.get("payload", {}).get(k) for k in ("variable_symbol", "variable_symbol_2")} - {None, ""}
+            if vs and bankvs and vs not in bankvs:
+                continue
             edges.append(frozenset((a["id"], b["id"])))
     return edges
 

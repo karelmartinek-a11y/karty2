@@ -3,22 +3,19 @@
 from pathlib import Path
 
 
+def counter_text(counters):
+    names = {"NEW": "Nové položky", "KNOWN": "Již uložené položky", "ERROR": "Chybné řádky",
+             "BLANK": "Prázdné řádky", "SUMMARY": "Souhrnné řádky", "CASH": "Hotovost",
+             "TRANSFER": "Převody", "TECHNICAL": "Řádky bez plateb", "UNPAID": "Neuhrazené platby",
+             "ZERO_AMOUNT": "Nulové částky", "new": "Nové vazby", "known": "Již uložené vazby",
+             "conflicts": "Rozporné vazby", "incomplete": "Neúplné řádky", "complete": "Úplné řádky"}
+    return " · ".join(f"{names.get(key, 'Další řádky')}: {value}" for key, value in counters.items())
+
+
 def reason(diagnostic):
     code = diagnostic.get("code")
-    messages = {
-        "HEADER_INVALID": "Chybí potřebné názvy sloupců. Použijte export plateb z Bookingu.",
-        "FORMAT_INVALID": "Soubor nemá podporovaný formát nebo je poškozený.",
-        "FILE_CHANGED": "Soubor nelze přečíst nebo se během načítání změnil.",
-        "FILE_TOO_LARGE": "Soubor je větší než povolená velikost v nastavení.",
-        "SOURCE_CONFLICT": "Platba už v programu je, ale tento soubor o ní uvádí jiné údaje. Uloženou platbu jsme nepřepsali.",
-        "UNKNOWN_ENUM": "Některý údaj o druhu nebo stavu platby má hodnotu, kterou program zatím neumí přečíst.",
-        "MONEY_INVALID": "Částku platby se nepodařilo přečíst.",
-        "DATE_INVALID": "Datum platby nebo pobytu se nepodařilo přečíst.",
-        "IDENTITY_MISSING": "Chybí platné číslo rezervace nebo označení výplaty.",
-        "ROW_SHAPE_INVALID": "Řádek nemá očekávaný počet sloupců.",
-        "CANCELLED": "Načítání bylo zastaveno na váš pokyn.",
-    }
-    message = messages.get(code, diagnostic.get("message", "Soubor se nepodařilo načíst."))
+    from kajovokarty.domain.errors import user_text
+    message = user_text(code)
     details = diagnostic.get("details") or {}
     if code == "SOURCE_CONFLICT" and isinstance(details, dict):
         old, new = details.get("old", {}), details.get("new", {})
@@ -40,7 +37,9 @@ def file_report(request, preview, state, outcome=None):
     already = (outcome or {}).get("known", preview.known if preview else 0)
     added = (outcome or {}).get("new", 0)
     excluded = {k: counters.get(k, 0) for k in ("UNPAID", "ZERO_AMOUNT") if counters.get(k)}
-    diagnostics = preview.diagnostics if preview else []
+    diagnostics = list(preview.diagnostics) if preview else []
+    diagnostics.extend({'severity': 'WARNING', 'code': code}
+                       for code in (outcome or {}).get('warnings', []))
     errors = list(dict.fromkeys(reason(d) for d in diagnostics if d.get("severity") == "ERROR"))
     return {
         "name": Path(request.original_name or request.path or (preview.files[0].name if preview and preview.files else "Soubor")).name,
@@ -76,6 +75,9 @@ def file_text(report):
     if report["errors"]:
         lines.append("Proč se soubor nepodařilo načíst:")
         lines.extend("• " + message for message in report["errors"])
+    if report.get("warnings"):
+        lines.append("Upozornění:")
+        lines.extend("• " + message for message in report["warnings"])
     return "\n".join(lines)
 
 

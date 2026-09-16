@@ -1,6 +1,8 @@
 """One undoable transaction for drag/drop, member transfer and partial unpairing."""
 
 import json
+from contextlib import nullcontext
+from kajovokarty.domain.payment_dates import payment_date
 from kajovokarty.application.work import WorkService
 from kajovokarty.domain.core import now, require, uid
 
@@ -63,9 +65,26 @@ class PairingService:
             )
             return cmd
 
-    def panel(self, identity):
+    def resolve_draft_rows(self, rows):
+        """Resolve transfer IDs against one current read snapshot."""
         with self.db.connect() as c:
-            c.execute("BEGIN")
+            c.execute('BEGIN')
+            resolved = []
+            for incoming in rows:
+                row = self.panel(incoming['id'], _connection=c)['object']
+                require(row['revision'] == incoming.get('revision'), 'STALE_STATE',
+                        'Přetahovaná položka se změnila. Vyberte ji znovu.')
+                require(row['currency'] == incoming.get('currency'), 'MIXED_CURRENCY',
+                        'Měna přetahované položky se změnila.')
+                resolved.append(row)
+            require(len({r['currency'] for r in resolved}) <= 1, 'MIXED_CURRENCY',
+                    'Nelze spojit různé měny.')
+            return resolved
+
+    def panel(self, identity, _connection=None):
+        with (nullcontext(_connection) if _connection is not None else self.db.connect()) as c:
+            if _connection is None:
+                c.execute("BEGIN")
             objects, groups, children, parents, sources = self.work._graph(
                 c, self._roots(c, [identity])
             )
@@ -79,6 +98,8 @@ class PairingService:
                 leaves = self.work._leaves(i, objects, children)
                 source = sources.get(i)
                 difference = self.work._difference(leaves, sources)
+                cash_leaves = [n for n in leaves if sources[n]['kind'] == 'CASHBOOK_CARD']
+                amount = sum(sources[n]['signed_amount_minor'] for n in (cash_leaves or leaves))
                 parent = parents.get(i)
                 return {
                     **objects[i],
@@ -91,10 +112,10 @@ class PairingService:
                     if source
                     else groups[i]["note"],
                     "kinds": sorted({sources[n]["kind"] for n in leaves}),
-                    "date": min(sources[n]["local_date"] for n in leaves),
+                    "date": min((d for n in leaves if (d := payment_date(sources[n]["kind"], sources[n]["local_date"], sources[n]["canonical_json"])) is not None), default=None),
                     "amount": source["signed_amount_minor"]
                     if source
-                    else abs(difference),
+                    else amount,
                     "difference": difference,
                     "leaf_count": len(leaves),
                     "resolved": i in groups and difference == 0,
@@ -106,6 +127,91 @@ class PairingService:
                 "rows": [row(i) for i in children.get(identity, [identity])],
                 "parent_id": parents.get(identity),
                 "suppressed_auto": self._suppressed(c, identity),
+            }
+
+    def save_draft(self, rows):
+        """Atomically replace all groups represented by a draft with one flat group."""
+        require(len(rows) >= 2, "GROUP_INVALID", "Vyberte alespoň dvě platby.")
+        ids = [r.get("id") for r in rows]
+        require(all(ids) and len(ids) == len(set(ids)), "SELECTION_INVALID", "Návrh obsahuje duplicitní položku.")
+        revisions = {r["id"]: r.get("revision") for r in rows}
+        with self.db.transaction() as c:
+            roots = self._roots(c, ids)
+            objects, groups, children, parents, sources = self.work._graph(c, roots)
+            self.work._check(objects, ids, revisions)
+            currencies = {objects[i]["currency"] for i in ids}
+            require(len(currencies) == 1, "MIXED_CURRENCY", "CZK a EUR nelze spojit.")
+
+            old_groups = set()
+            leaves = []
+            for identity in ids:
+                node = identity
+                if objects[node]["type"] == "GROUP":
+                    old_groups.add(node)
+                if node in parents:
+                    old_groups.add(parents[node])
+                current = node
+                while current in parents:
+                    old_groups.add(parents[current])
+                    current = parents[current]
+                leaves.extend(self.work._leaves(node, objects, children))
+            leaves = list(dict.fromkeys(leaves))
+            require(len(leaves) >= 2, "GROUP_INVALID", "Skupina musí obsahovat alespoň dvě platby.")
+            require(all(objects[i]["type"] == "SOURCE" for i in leaves), "GROUP_INVALID", "Skupiny mohou obsahovat pouze platby.")
+            difference = self.work._difference(leaves, sources)
+            require(difference == 0, "NONZERO_DIFFERENCE", "Návrh není přesně vyrovnaný.")
+
+            new_group = uid()
+            touched = [new_group, *leaves, *old_groups]
+            before = self.work._snapshot(c, touched)
+            fingerprints = []
+            for gid in old_groups:
+                record = groups.get(gid)
+                if record:
+                    fingerprint = json.loads(record["evidence_json"]).get("fingerprint")
+                    if fingerprint:
+                        fingerprints.append(fingerprint)
+            suppression_before = self.work._supp(c, fingerprints)
+            command = self.work._new_command(c, "REPLACE_GROUP", "MANUAL", before, suppression_before)
+
+            for gid in old_groups:
+                self.work._archive(c, gid, command)
+                c.execute(
+                    "UPDATE membership SET active=0,ended_by_command=?,ended_at=? WHERE parent_id=? AND active=1",
+                    (command, now(), gid),
+                )
+                c.execute("UPDATE work_object SET lifecycle='DISSOLVED' WHERE id=?", (gid,))
+            c.execute(
+                "INSERT INTO work_object VALUES(?,'GROUP',NULL,?,'ACTIVE',1)",
+                (new_group, next(iter(currencies))),
+            )
+            c.execute(
+                "INSERT INTO reconciliation_group VALUES(?,?,?,?,?,?)",
+                (new_group, "MANUAL", "", now(), now(), "{}"),
+            )
+            for leaf in leaves:
+                c.execute(
+                    "INSERT INTO membership VALUES(?,?,?,1,?,NULL,?,NULL)",
+                    (uid(), new_group, leaf, command, now()),
+                )
+            for identity in set(leaves) | old_groups:
+                c.execute("UPDATE work_object SET revision=revision+1 WHERE id=?", (identity,))
+                c.execute("DELETE FROM work_selection WHERE object_id=?", (identity,))
+            self.work._finish(
+                c,
+                command,
+                "REPLACE_GROUP",
+                before,
+                self.work._snapshot(c, [new_group, *leaves, *old_groups]),
+                suppression_before,
+                self.work._supp(c, fingerprints),
+            )
+            return {
+                "id": new_group,
+                "command_id": command,
+                "difference": difference,
+                "moved": len(leaves),
+                "dissolved": sorted(old_groups),
             }
 
     def move(

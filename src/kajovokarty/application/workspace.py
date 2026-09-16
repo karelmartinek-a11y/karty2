@@ -3,6 +3,7 @@
 from pathlib import Path
 import os, shutil, sqlite3, tempfile
 from kajovokarty.domain.core import AppError, bytehash, canonical, now, require, uid
+from kajovokarty.infrastructure.file_storage import publish_staged_file
 
 
 def local_directory(path):
@@ -92,7 +93,7 @@ class WorkspaceService:
                     dest.commit()
                 final = target / "kajovokarty.sqlite"
                 expected = bytehash(candidate.read_bytes())
-                os.replace(candidate, final)
+                publish_staged_file(candidate, final)
                 require(
                     bytehash(final.read_bytes()) == expected,
                     "DATABASE_INVALID",
@@ -135,7 +136,7 @@ def recover_backup(backup, target):
             old = target / name
             if old.exists():
                 shutil.copy2(old, damaged / name)
-        os.replace(db.path, target / "kajovokarty.sqlite")
+        publish_staged_file(db.path, target / "kajovokarty.sqlite")
         for suffix in ("-wal", "-shm"):
             (target / ("kajovokarty.sqlite" + suffix)).unlink(missing_ok=True)
     return str(target)

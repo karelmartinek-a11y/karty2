@@ -1,6 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
-import json, threading
+import json
+import threading
 from PySide6.QtCore import Qt, QThreadPool, QTimer, QByteArray, QItemSelectionModel
 from PySide6.QtGui import QFont, QIcon, QPainter, QPixmap, QColor
 from PySide6.QtWidgets import (
@@ -45,7 +46,7 @@ from kajovokarty.application.matching import MatchingService
 from kajovokarty.application.backup import BackupService
 from kajovokarty.application.catalog import CatalogService
 from kajovokarty.application.reports import ReportService
-from kajovokarty.ui.models import TableModel, WORK_COLUMNS
+from kajovokarty.ui.models import TableModel, WORK_COLUMNS, HIDDEN_PAYMENT_COLUMNS, payment_columns, hide_payment_columns
 from kajovokarty.ui.work_table import WorkTable
 from kajovokarty.ui.workers import Job
 from kajovokarty.ui.actions import ActionSpec, ActionRegistry
@@ -59,6 +60,7 @@ NAV = [
     "Sestavy",
     "Audit",
     "Nastavení",
+    "Skupiny",
 ]
 SOURCE_NAMES = {
     "Pokladna (XLS)": "CASHBOOK_CARD",
@@ -138,12 +140,18 @@ class MainWindow(QMainWindow):
         self.restoring_selection = False
         self.scope = 0
         self.query_revision = 0
+        # Invalidates read-only responses which were started before a mutation.
+        self.live_view_revision = 0
+        self.candidate_request = 0
+        self.candidate_context = None
+        self.candidate_rows = None
         self.sort_order = [("date", "asc")]
         self.advanced = {}
         self.column_states = {}
         self.view_sorts = {}
         self.facet_rows = []
         self.global_history = False
+        self.combined_groups_only = False
         self.setWindowTitle("KájovoKarty")
         self.resize(1366, 850)
         self.setMinimumSize(1100, 700)
@@ -193,7 +201,10 @@ class MainWindow(QMainWindow):
                 "Ctrl+Shift+F",
                 self.counterparts,
             ),
-            ("add_group", "Přidat do skupiny", "", self.add_group_dialog),
+            ("add_group", "Přidat do párovací plochy", "", self.add_selection),
+            # Keystroke/API compatibility for existing integrations; grouping is
+            # now exposed through the pairing panel instead of a section button.
+            ("group", "Vytvořit skupinu / spárovat", "", self.group_dialog),
             ("drop_group", "Přetáhnout do skupiny", "", self.drop_group),
             ("copy", "Kopírovat hlavní ID", "", lambda: self.copy_rows(False)),
             (
@@ -203,7 +214,6 @@ class MainWindow(QMainWindow):
                 lambda: self.copy_rows(True),
             ),
             ("audit_object", "Audit objektu", "", self.open_detail),
-            ("group", "Vytvořit skupinu / spárovat", "Ctrl+M", self.group_dialog),
             (
                 "undo",
                 "Zpět",
@@ -220,7 +230,6 @@ class MainWindow(QMainWindow):
             ),
             ("refresh", "Obnovit pohled", "F5", self.refresh),
             ("find", "Fulltext", "Ctrl+F", lambda: self.search.setFocus()),
-            ("clear", "Vyčistit výběr", "Ctrl+Shift+Space", self.clear_selection),
             ("dissolve", "Rozložit skupinu", "Shift+Delete", self.dissolve_selected),
             ("note", "Upravit poznámku", "F2", self.edit_note),
             ("export", "Exportovat", "", self.export_dialog),
@@ -239,6 +248,8 @@ class MainWindow(QMainWindow):
             )
             if id in ("import", "auto"):
                 bar.addAction(action)
+            if id == "group":
+                action.setVisible(False)
         bar.addSeparator()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Hledat číslo, hosta, VS…")
@@ -301,10 +312,9 @@ class MainWindow(QMainWindow):
         self.table.dropHint.connect(lambda text: self.status.setText(text))
         self.table.allRequested.connect(self.highlight_all)
         self.table.copyRequested.connect(self.copy_rows)
-        self.table.groupDropped.connect(
-            lambda payload, row: self.registry.invoke("drop_group", payload, row)
-        )
+        self.table.groupDropped.connect(self.add_drag_to_panel)
         self.table.setModel(self.model)
+        hide_payment_columns(self.table, self.model.columns)
         cc = self.table.column_controller
         cc.get_filters = lambda: self.column_states.setdefault(self.scope, {})
         cc.set_filter = self.set_column_filter
@@ -320,7 +330,30 @@ class MainWindow(QMainWindow):
         self.table.doubleClicked.connect(self.open_detail)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.context_menu)
-        self.contentlayout.addWidget(self.table, 1)
+        self.group_detail_model = TableModel(columns=[
+            ("primary_identifier", "Položka"), ("type", "Objekt"),
+            ("kinds", "Zdroj"), ("amount", "Částka"),
+            ("difference", "Příspěvek"), ("currency", "Měna"),
+        ])
+        self.group_detail_table = WorkTable()
+        self.group_detail_table.workspace = self.workspace_id
+        self.group_detail_table.setModel(self.group_detail_model)
+        self.group_detail_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.group_detail_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.group_detail_table.setAccessibleName("Obsah vybrané skupiny")
+        self.group_detail_title = QLabel("Vyberte skupinu")
+        detail = QWidget()
+        detail_layout = QVBoxLayout(detail)
+        detail_layout.addWidget(self.group_detail_title)
+        detail_layout.addWidget(self.group_detail_table, 1)
+        self.group_detail = detail
+        self.group_detail.hide()
+        self.group_splitter = QSplitter(Qt.Horizontal)
+        self.group_splitter.addWidget(self.table)
+        self.group_splitter.addWidget(self.group_detail)
+        self.group_splitter.setStretchFactor(0, 3)
+        self.group_splitter.setStretchFactor(1, 2)
+        self.contentlayout.addWidget(self.group_splitter, 1)
         self.page = 0
         self.total = 0
         pager = QHBoxLayout()
@@ -334,9 +367,7 @@ class MainWindow(QMainWindow):
         bottom = QHBoxLayout()
         self.selection_label = QLabel("Pracovní výběr je prázdný.")
         bottom.addWidget(self.selection_label, 1)
-        bottom.addWidget(button("Přidat označené", self.add_selection))
-        bottom.addWidget(button("Vytvořit skupinu / spárovat", self.group_dialog))
-        bottom.addWidget(button("Vyčistit", self.clear_selection))
+        bottom.addWidget(button("Přidat do párovací plochy", self.add_selection))
         rootlayout.addLayout(bottom)
         self.status = QLabel("Připraveno")
         self.statusBar().addWidget(self.status, 1)
@@ -349,18 +380,19 @@ class MainWindow(QMainWindow):
         self.pair_dock = QDockWidget("Párovací plocha", self)
         self.pair_dock.setObjectName("pairingDock")
         self.pair_dock.setWidget(self.pair_panel)
-        self.pair_dock.setMinimumWidth(410)
+        self.pair_dock.setMinimumWidth(550)
         self.addDockWidget(Qt.RightDockWidgetArea, self.pair_dock)
         self.pair_dock.hide()
         bar.addAction(self.pair_dock.toggleViewAction())
         self.pair_panel.requested.connect(self.open_pairing)
-        self.pair_panel.dropped.connect(
-            lambda payload, target: self.registry.invoke("drop_group", payload, target)
-        )
+        self.pair_panel.dropped.connect(self.panel_drop)
         self.pair_panel.newGroup.connect(self.drop_new_group)
         self.pair_panel.detachRequested.connect(self.detach_panel_members)
-        self.pair_panel.dissolveRequested.connect(self.unpair_panel)
-        self.pair_panel.allowAutoRequested.connect(self.allow_panel_auto)
+        self.pair_panel.saveRequested.connect(self.save_panel_draft)
+        self.pair_panel.candidatesRequested.connect(self.find_panel_candidates)
+        self.pair_panel.candidateAdded.connect(lambda rows: self.pair_panel.add_rows(rows))
+        self.pair_panel.draftChanged.connect(self.invalidate_candidates)
+        self.pair_panel.candidateFilterChanged.connect(self.candidate_filter_changed)
         self.pair_panel.table.drag_guard = lambda: not self.busy
         self.pair_panel.table.dropHint.connect(self.status.setText)
         self.panel_timer = QTimer(self)
@@ -381,6 +413,8 @@ class MainWindow(QMainWindow):
     def run(
         self, fn, done=None, mutating=True, error_handler=None, progress_handler=None
     ):
+        if getattr(self, "shutting_down", False):
+            return
         if mutating and self.busy:
             return
         if mutating:
@@ -388,7 +422,7 @@ class MainWindow(QMainWindow):
             self.cancel.clear()
             self.registry.refresh()
             self.cancel_button.setEnabled(True)
-        job = Job(fn)
+        job = Job(fn, self.db.log)
         self.jobs.add(job)
         job.signals.progress.connect(
             progress_handler or (lambda event: self.status.setText(str(event)))
@@ -399,6 +433,8 @@ class MainWindow(QMainWindow):
 
         def finish():
             self.jobs.discard(job)
+            if self.db.log.failure:
+                self.status.setText("Podrobný provozní záznam se nepodařilo uložit. Zkontrolujte volné místo a přístup do datové složky.")
             if mutating:
                 self.busy = False
                 self.cancel_button.setEnabled(False)
@@ -408,15 +444,11 @@ class MainWindow(QMainWindow):
         self.pool.start(job)
 
     def show_error(self, e):
-        self.status.setText(e.code + " — " + e.message)
-        QMessageBox.warning(
-            self,
-            "Operace nebyla dokončena",
-            e.code
-            + "\n"
-            + e.message
-            + ("\n" + canonical(e.details) if e.details else ""),
-        )
+        from kajovokarty.domain.errors import explain
+        item = explain(e.code)
+        self.status.setText(item.name + " — " + e.user_message)
+        QMessageBox.warning(self, item.name, e.user_message + "\nČíslo chyby: " + e.code
+                            + ("\nOperace: " + e.operation_id if e.operation_id else ""))
 
     def cancel_operation(self):
         self.cancel.set()
@@ -425,6 +457,13 @@ class MainWindow(QMainWindow):
     def navigate(self, index):
         self.result_selection = None
         self.view_sorts[self.scope] = list(self.sort_order)
+        if index != 4:
+            self.candidate_rows = None
+            self.candidate_context = None
+            self.candidate_request += 1
+        if index == 8 and hasattr(self, "pair_panel"):
+            self.pair_panel.clear_draft()
+            self.pair_dock.hide()
         self.scope = index
         self.sort_order = self.view_sorts.get(
             index, [("date", "asc")] if index in (0, 1, 4) else []
@@ -439,7 +478,7 @@ class MainWindow(QMainWindow):
         actions = {
             0: [
                 ("Najít možné protějšky", self.counterparts),
-                ("Přidat výběr do skupiny", self.add_group_dialog),
+                ("Přidat do párovací plochy", self.add_selection),
                 ("Exportovat filtr", self.export_dialog),
             ],
             1: [
@@ -474,6 +513,10 @@ class MainWindow(QMainWindow):
                 ("Diagnostika", self.diagnostic_dialog),
                 ("Nápověda", self.help_dialog),
             ],
+            8: [
+                ("Jen kombinované skupiny", self.toggle_combined_groups),
+                ("Exportovat", self.export_dialog),
+            ],
         }
         for label, fn in actions.get(index, []):
             self.contextbar.addWidget(button(label, fn))
@@ -485,6 +528,15 @@ class MainWindow(QMainWindow):
         self.refresh()
 
     def filters(self):
+        if self.scope in (0, 1, 4):
+            self.column_states[self.scope] = {
+                k: v for k, v in self.column_states.get(self.scope, {}).items()
+                if k not in HIDDEN_PAYMENT_COLUMNS
+            }
+            self.sort_order = [(k, direction) for k, direction in self.sort_order
+                               if k not in HIDDEN_PAYMENT_COLUMNS] or (
+                                   [] if self.scope == 4 and self.candidate_context is not None
+                                   else [("date", "asc")])
         f = {
             **self.advanced,
             "text": self.search.text(),
@@ -492,7 +544,7 @@ class MainWindow(QMainWindow):
                 k: list(v) for k, v in self.column_states.get(self.scope, {}).items()
             },
             "status": "resolved"
-            if self.scope == 1
+            if self.scope in (1, 8)
             else "all"
             if self.scope == 4
             else "unresolved",
@@ -518,10 +570,11 @@ class MainWindow(QMainWindow):
             return
         page = self.page
         sort_order = list(self.sort_order)
+        candidate_context = self.candidate_context if scope == 4 else None
 
         def query(progress):
             selection = self.work.selection()
-            if scope in (0, 1, 4):
+            if scope in (0, 1, 4, 8):
                 result = self.work.query(
                     {**f, "column_filters": {}}
                     if scope == 4 and self.global_history
@@ -530,7 +583,12 @@ class MainWindow(QMainWindow):
                     page=page,
                     page_size=0 if scope == 4 and self.global_history else 500,
                 )
-                if scope == 4 and self.global_history:
+                if candidate_context is not None:
+                    anchor_id, anchor_revision, include_paired = candidate_context
+                    candidates = self.work.candidates(anchor_id, anchor_revision, include_paired)
+                    filtered = self.filter_catalog_rows(candidates, f.get('column_filters'), sort_order, page)
+                    result = {**result, **filtered}
+                elif scope == 4 and self.global_history:
                     extra = self.catalog.global_matches(f.get("text", ""))
                     from kajovokarty.domain.columns import filter_rows
 
@@ -540,11 +598,17 @@ class MainWindow(QMainWindow):
                     result["ids"] = [r["id"] for r in combined]
                     result["total"] = len(combined)
                     result["rows"] = combined[page * 500 : (page + 1) * 500]
+                if scope == 8:
+                    result["rows"] = [r for r in result["rows"] if r.get("type") == "GROUP"]
+                    if getattr(self, "combined_groups_only", False):
+                        result["rows"] = [r for r in result["rows"] if r.get("leaf_count", 0) >= 3]
+                    result["ids"] = [r["id"] for r in result["rows"]]
+                    result["total"] = len(result["rows"])
                 return (
                     "work",
                     result,
                     selection,
-                    self.catalog.view("columns:" + str(scope)),
+                    self.catalog.view("columns:compact-v1:" + str(scope)),
                 )
             if scope == 2:
                 rows = self.catalog.rows("imports")
@@ -565,7 +629,7 @@ class MainWindow(QMainWindow):
                     rows, f.get("column_filters"), sort_order, page
                 ),
                 selection,
-                self.catalog.view("columns:" + str(scope)),
+                self.catalog.view("columns:compact-v1:" + str(scope)),
             )
 
         def done(result):
@@ -573,12 +637,15 @@ class MainWindow(QMainWindow):
                 return
             kind, value, self.selection, state = result
             selected = set(self.selected_ids())
-            self.rows = value["rows"]
+            self.rows = list(value["rows"])
             self.facet_rows = value.get("base_rows", [])
+            if candidate_context is not None:
+                self.candidate_rows = list(self.facet_rows)
+                self.pair_panel.show_candidates(self.facet_rows)
             self.page = value.get("page", page)
             scroll = self.table.verticalScrollBar().value()
             cols = (
-                WORK_COLUMNS
+                payment_columns(f.get("kind") == ["BOOKING"])
                 if kind == "work"
                 else [(k, k) for k in self.facet_rows[0]]
                 if self.facet_rows
@@ -588,8 +655,12 @@ class MainWindow(QMainWindow):
             )
             if scope == 2:
                 cols = [("original_name", "Soubor"), ("started_at", "Čas načtení"), ("status_label", "Stav"), ("result_text", "Výsledek")]
+            if scope == 8:
+                cols = payment_columns(False)
             self.restoring_selection = True
             self.model.replace(self.rows, cols)
+            draft_ids = {r.get("id") for r in self.pair_panel.draft_rows}
+            self.model.set_bold_ids([r.get("id") for r in self.rows if r.get("id") in draft_ids])
             self.total = value["total"]
             self.empty_hint.setVisible(
                 scope == 0 and self.total == 0 and not self.search.text()
@@ -630,6 +701,8 @@ class MainWindow(QMainWindow):
             layout_key = (scope, tuple(key for key, _ in cols))
             if getattr(self, "displayed_layout", None) != layout_key:
                 self.table.horizontalHeader().blockSignals(True)
+                for i in range(len(cols)):
+                    self.table.setColumnHidden(i, False)
                 if state:
                     self.table.horizontalHeader().restoreState(
                         QByteArray.fromBase64(state.encode())
@@ -658,12 +731,21 @@ class MainWindow(QMainWindow):
                             ),
                         )
                 self.table.horizontalHeader().blockSignals(False)
+                if kind == 'work' and not state:
+                    from kajovokarty.ui.models import compact_payment_columns
+                    compact_payment_columns(self.table)
                 self.displayed_layout = layout_key
+            if kind == "work":
+                hide_payment_columns(self.table, cols)
             self.restoring_selection = False
             self.table.column_controller.refresh(sort_order)
             self.registry.refresh()
+            self.group_detail.setVisible(scope == 8)
+            if scope == 8:
+                self.show_selected_group_detail()
 
-        self.run(query, done, False)
+        self.run(query, done, False,
+                 error_handler=lambda error: self.show_error(error) if revision == self.query_revision else None)
 
     @staticmethod
     def filter_catalog_rows(rows, filters, sort, page):
@@ -688,6 +770,9 @@ class MainWindow(QMainWindow):
         else:
             state[field] = list(selected)
         self.result_selection = None
+        if self.scope == 4 and self.candidate_context is not None:
+            self.pair_panel.candidate_model.set_column_filter(field, selected)
+            self.pair_panel.candidate_table.column_controller.refresh()
         self.page = 0
         self.refresh()
 
@@ -703,6 +788,9 @@ class MainWindow(QMainWindow):
         f = self.filters()
         history = self.global_history
         rows = list(self.facet_rows)
+        if scope == 4 and self.candidate_context is not None:
+            done(filter_options(rows, field, f.get('column_filters')))
+            return
 
         def query(progress):
             if scope in (0, 1, 4):
@@ -816,7 +904,7 @@ class MainWindow(QMainWindow):
         state = bytes(self.table.horizontalHeader().saveState().toBase64()).decode()
         scope = self.scope
         self.run(
-            lambda p: self.catalog.save_view("columns:" + str(scope), state),
+            lambda p: self.catalog.save_view("columns:compact-v1:" + str(scope), state),
             mutating=False,
         )
 
@@ -862,11 +950,17 @@ class MainWindow(QMainWindow):
                 and r.get("lifecycle") == "ACTIVE"
                 for r in rows
             )
-        if id in ("note", "dissolve", "add_group"):
+        if id in ("note", "dissolve"):
             return (
                 len(rows) == 1
                 and rows[0].get("type") == "GROUP"
                 and rows[0].get("lifecycle") == "ACTIVE"
+            )
+        if id == "add_group":
+            return bool(rows) and all(
+                r.get("type") in ("SOURCE", "GROUP")
+                and r.get("lifecycle") == "ACTIVE"
+                for r in rows
             )
         if id == "group":
             return len(self.selection) >= 2 or (
@@ -882,8 +976,8 @@ class MainWindow(QMainWindow):
         if self.restoring_selection:
             return
         self.result_selection = None
-        if hasattr(self, "panel_timer"):
-            self.panel_timer.start()
+        if self.scope == 8:
+            self.show_selected_group_detail()
         self.registry.refresh()
 
     def highlight_all(self):
@@ -941,35 +1035,11 @@ class MainWindow(QMainWindow):
         return True
 
     def open_selected_pairing(self):
-        rows = self.selected_rows()
-        if (
-            len(rows) == 1
-            and rows[0].get("type") in ("SOURCE", "GROUP")
-            and rows[0].get("lifecycle") == "ACTIVE"
-        ):
-            self.open_pairing(rows[0]["id"])
+        # Selection in the work table never changes the global draft.
+        return
 
     def open_pairing(self, identity):
-        self.panel_revision += 1
-        revision = self.panel_revision
-
-        def show(data):
-            if revision != self.panel_revision:
-                return
-            self.pair_panel.show_data(data)
-            opening = not self.pair_dock.isVisible()
-            self.pair_dock.show()
-            if opening:
-                self.resizeDocks([self.pair_dock], [650], Qt.Horizontal)
-
-        self.run(
-            lambda p: self.pairing.panel(identity),
-            show,
-            False,
-            error_handler=lambda e: self.pair_panel.reset()
-            if revision == self.panel_revision
-            else None,
-        )
+        self.pair_dock.show()
 
     def drop_group(self, payload, target):
         if self.busy or payload.get("workspace") != self.workspace_id:
@@ -1005,34 +1075,56 @@ class MainWindow(QMainWindow):
             self.pairing_done,
         )
 
+    def add_transfer_to_draft(self, rows):
+        draft_revision = self.pair_panel.draft_revision
+        view_revision = self.live_view_revision
+        def current():
+            return (draft_revision == self.pair_panel.draft_revision
+                    and view_revision == self.live_view_revision)
+        def done(resolved):
+            if not current():
+                return
+            currencies = {r.get('currency') for r in self.pair_panel.draft_rows + resolved}
+            if len(currencies) > 1:
+                self.show_error(AppError('MIXED_CURRENCY', 'Nelze spojit různé měny.'))
+                return
+            self.pair_dock.show()
+            self.pair_panel.add_rows(resolved)
+        self.run(lambda p: self.pairing.resolve_draft_rows(rows), done, False,
+                 error_handler=lambda error: self.show_error(error) if current() else None)
+
+    def panel_drop(self, payload, target):
+        if self.busy or payload.get('workspace') != self.workspace_id:
+            return
+        rows = payload.get('rows', [])
+        if target == 'remove':
+            ids = {r.get('id') for r in rows}
+            panel = self.pair_panel
+            panel.draft_rows = [r for r in panel.draft_rows if r.get('id') not in ids]
+            panel.current = panel.draft_rows[0] if panel.draft_rows else None
+            panel.model.replace(panel.draft_rows)
+            panel.dirty = True
+            panel._update_summary()
+            return
+        self.add_transfer_to_draft(rows)
+
+
     def pairing_done(self, result):
+        if hasattr(self, "pair_panel"):
+            self.pair_panel.dirty = False
+            self.pair_panel.clear_draft()
         self.after_mutation(result)
-        self.status.setText(f"Přesunuto {result['moved']} objektů. Zpět: Ctrl+Z.")
-        if result.get("id"):
-            self.open_pairing(result["id"])
-        elif self.pair_panel.current:
-            self.open_pairing(self.pair_panel.current["id"])
+        self.status.setText(f"Uloženo {result.get('moved', 0)} plateb. Zpět: Ctrl+Z.")
 
     def drop_new_group(self, payload):
-        if len(payload.get("rows", [])) < 2:
-            self.show_error(
-                AppError(
-                    "GROUP_INVALID",
-                    "Pro novou skupinu přetáhněte alespoň dvě položky nebo položku na protějšek.",
-                )
-            )
-            return
-        first, *rest = payload["rows"]
-        self.drop_group({**payload, "rows": rest}, {**first, "lifecycle": "ACTIVE"})
+        rows = payload.get("rows", [])
+        if rows and not self.busy and payload.get('workspace') == self.workspace_id:
+            self.add_transfer_to_draft(rows)
+            self.status.setText("Položky byly přidány do pracovního návrhu. Uložte skupiny.")
 
     def detach_panel_members(self):
-        table = self.pair_panel.table
-        rows = [
-            self.pair_panel.model.rows[i.row()]
-            for i in table.selectionModel().selectedRows()
-        ]
-        if rows:
-            self.drop_group({"workspace": self.workspace_id, "rows": rows}, None)
+        if self.pair_panel.remove_selected_draft():
+            self.status.setText("Označené položky byly vyjmuty z pracovního návrhu. Uložte skupiny.")
 
     def allow_panel_auto(self):
         if self.pair_panel.current:
@@ -1054,15 +1146,129 @@ class MainWindow(QMainWindow):
         self.run(lambda p: self.work.select(ids), self.after_mutation)
 
     def after_mutation(self, result=None):
+        self.live_view_revision += 1
+        self.invalidate_candidates(refresh=False)
+        if hasattr(self, "pair_panel"):
+            self.pair_panel.clear_candidates()
         self.status.setText("Operace dokončena.")
         self.refresh()
-        if hasattr(self, "pair_panel") and self.pair_panel.current:
-            self.open_pairing(self.pair_panel.current["id"])
 
     def add_selection(self):
-        ids = self.selected_ids()
-        if ids:
-            self.run(lambda p: self.work.select(ids), self.after_mutation)
+        rows = self.selected_rows()
+        if rows:
+            self.pair_dock.show()
+            self.pair_panel.add_rows(rows)
+            self.status.setText(f"Do párovací plochy přidáno: {len(rows)}. Změny uložte tlačítkem Uložit skupiny.")
+
+    def add_drag_to_panel(self, payload, target):
+        if self.busy or payload.get("workspace") != self.workspace_id:
+            return
+        rows = list(payload.get("rows", []))
+        if target and target.get("id") not in {r.get("id") for r in rows}:
+            rows.append(target)
+        self.add_transfer_to_draft(rows)
+
+    def save_panel_draft(self):
+        panel = self.pair_panel
+        rows = list(panel.draft_rows)
+        if len(rows) < 2:
+            self.show_error(AppError("GROUP_INVALID", "Párovací plocha potřebuje alespoň dvě položky."))
+            return
+        paired = [r for r in rows if r.get("resolved") and r.get("type") == "GROUP"]
+        if paired:
+            old = "\n".join(
+                f"• {r.get('primary_identifier', r.get('id'))} ({r.get('leaf_count', '?')} plateb)"
+                for r in paired
+            )
+            new = "\n".join(
+                f"• {r.get('primary_identifier', r.get('id'))}"
+                for r in rows
+            )
+            answer = QMessageBox.question(
+                self,
+                "Přestavět spárování",
+                "Uložením se rozpustí původní skupiny:\n\n"
+                + old
+                + "\n\nVznikne nová skupina:\n\n"
+                + new
+                + "\n\nChcete pokračovat?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+        self.run(lambda p: self.pairing.save_draft(rows), self.pairing_done)
+
+    def find_panel_candidates(self):
+        if not self.pair_panel.current:
+            self.status.setText("Nejprve přidejte položku do párovací plochy.")
+            return
+        anchor = self.pair_panel.current
+        include_paired = self.pair_panel.include_paired.isChecked()
+        view_revision = self.live_view_revision
+        self.candidate_request += 1
+        request = self.candidate_request
+        draft_revision = self.pair_panel.draft_revision
+        context = (anchor['id'], anchor['revision'], include_paired)
+        def current():
+            return (request == self.candidate_request and view_revision == self.live_view_revision
+                    and draft_revision == self.pair_panel.draft_revision)
+        self.run(lambda p: self.work.candidates(anchor["id"], anchor["revision"], include_paired),
+                 lambda rows: self.show_candidate_rows(rows, view_revision, context) if current() else None,
+                 False, error_handler=lambda error: self.show_error(error) if current() else None)
+
+    def invalidate_candidates(self, refresh=True):
+        active = self.candidate_context is not None
+        self.candidate_request += 1
+        self.candidate_context = None
+        self.candidate_rows = None
+        self.query_revision += 1
+        self.pair_panel.clear_candidates()
+        if active and self.scope == 4 and refresh:
+            self.refresh()
+
+    def candidate_filter_changed(self, field, selected):
+        if self.scope == 4 and self.candidate_context is not None:
+            self.set_column_filter(field, selected)
+
+    def show_candidate_rows(self, rows, view_revision=None, context=None):
+        if view_revision is not None and view_revision != self.live_view_revision:
+            return
+        self.pair_panel.show_candidates(rows, reset_sources=True)
+        self.candidate_context = context
+        self.candidate_rows = list(rows)
+        self.column_states[4] = dict(self.pair_panel.candidate_model.column_filters)
+        self.view_sorts[4] = []  # Preserve the service's proximity ranking.
+        self.nav.setCurrentRow(4)
+        self.sort_order = []
+        self.refresh()
+        self.status.setText(f"Nalezeno kandidátů: {len(rows)}. Nejbližší shody jsou nahoře.")
+
+    def toggle_combined_groups(self):
+        self.combined_groups_only = not getattr(self, "combined_groups_only", False)
+        self.refresh()
+
+    def show_selected_group_detail(self):
+        if self.scope != 8:
+            return
+        rows = self.selected_rows()
+        if len(rows) != 1 or rows[0].get("type") != "GROUP":
+            self.group_detail_title.setText("Vyberte skupinu")
+            self.group_detail_model.replace([])
+            return
+        identity = rows[0]["id"]
+        view_revision = self.live_view_revision
+
+        def done(data):
+            if self.scope != 8 or view_revision != self.live_view_revision:
+                return
+            group = data["object"]
+            self.group_detail_title.setText(
+                f"{group['primary_identifier']} · {group['leaf_count']} plateb · rozdíl {display_money(group['difference'])} {group['currency']}"
+            )
+            self.group_detail_model.replace(data["rows"])
+
+        self.run(lambda p: self.pairing.panel(identity), done, False)
 
     def clear_selection(self):
         self.run(lambda p: self.work.select([], clear=True), self.after_mutation)
@@ -1129,9 +1335,12 @@ class MainWindow(QMainWindow):
             buttons.rejected.connect(d.reject)
             layout.addWidget(buttons)
             if d.exec():
+                # Capture widgets while still in the GUI thread and before the
+                # dialog can be destroyed; workers receive only plain values.
+                note_value = note.text()
                 self.run(
                     lambda p: self.work.create_group(
-                        list(selection), selection, note.text()
+                        list(selection), selection, note_value
                     ),
                     self.after_mutation,
                 )
@@ -1139,32 +1348,7 @@ class MainWindow(QMainWindow):
         self.run(preview, show, False)
 
     def add_group_dialog(self):
-        rows = self.selected_rows()
-        if len(rows) != 1 or rows[0].get("type") != "GROUP":
-            self.show_error(AppError("GROUP_INVALID", "Označte jednu cílovou skupinu."))
-            return
-        group = rows[0]
-
-        def preview(progress):
-            return self.work.selection()
-
-        def show(selection):
-            ids = [i for i in selection if i != group["id"]]
-            if not ids:
-                self.show_error(
-                    AppError("GROUP_INVALID", "Pracovní výběr neobsahuje další kořeny.")
-                )
-                return
-            revisions = {**selection, group["id"]: group["revision"]}
-            self.drop_group(
-                {
-                    "workspace": self.workspace_id,
-                    "rows": [{"id": i, "revision": revisions[i]} for i in ids],
-                },
-                group,
-            )
-
-        self.run(preview, show, False)
+        self.add_selection()
 
     def choose_import(self, kind=None):
         if self.busy:
@@ -1189,67 +1373,46 @@ class MainWindow(QMainWindow):
             self.preflight([ImportInput(kind, p) for p in paths])
 
     def preflight(self, inputs):
-        if inputs and all(request.kind == "BOOKING" for request in inputs):
-            self.booking_import_queue(inputs)
+        if self.busy or not inputs:
             return
-        self.run(
-            lambda p: self.imports.preflight(
-                inputs, self.settings.get()["imports.max_megabytes"], self.cancel, p
-            ),
-            self.import_preview,
-        )
+        from threading import Event
+        from kajovokarty.application.import_batch import ImportBatchService
+        from kajovokarty.ui.import_progress import ImportProgressDialog
+        self.cancel.clear()
+        dialog = ImportProgressDialog(self, self.cancel)
+        self.import_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        service = ImportBatchService(self.db)
+
+        def execute(progress):
+            def choose_sheet(name, sheets):
+                request = dict(sheet_request=True, name=name, sheets=sheets, ready=Event(), answer=None)
+                progress(request)
+                while not request["ready"].wait(0.1):
+                    if self.cancel.is_set():
+                        return None
+                return request["answer"]
+            return service.run(inputs, self.settings.get()["imports.max_megabytes"],
+                               self.cancel, progress, choose_sheet)
+
+        def completed(reports):
+            self.after_mutation()
+            dialog.finish(reports)
+            self.status.setText(dialog.windowTitle())
+
+        def failed(error):
+            self.after_mutation()
+            dialog.finish(getattr(service, "reports", []), error)
+            self.status.setText(error.user_message)
+
+        self.run(execute, completed, error_handler=failed, progress_handler=dialog.update_progress)
 
     def booking_import_queue(self, inputs):
-        if self.busy:
-            return
-        dialog = QDialog(self)
-        dialog.setObjectName("bookingImportQueue")
-        dialog.setWindowTitle("Načíst platby z Bookingu")
-        dialog.resize(740, 420)
-        layout = QVBoxLayout(dialog)
-        explanation = QLabel("Vybrané soubory načteme jeden po druhém v uvedeném pořadí. Pokud se některý nepodaří načíst, pokračujeme dalším. Platby, které už v programu jsou, neuložíme podruhé.")
-        explanation.setWordWrap(True)
-        layout.addWidget(explanation)
-        files = QPlainTextEdit()
-        files.setReadOnly(True)
-        files.setPlainText("\n".join(f"{i}. {Path(r.original_name or r.path or 'Uložený soubor').name}" for i, r in enumerate(inputs, 1)))
-        layout.addWidget(files)
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Ok).setText("Načíst vybrané soubory")
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-        if dialog.exec() != QDialog.Accepted:
-            return
-        from kajovokarty.application.booking_import import BookingImportService
-        self.run(
-            lambda progress: BookingImportService(self.db).run(inputs, self.settings.get()["imports.max_megabytes"], self.cancel, progress),
-            self.booking_import_completed,
-        )
-
-    def booking_import_completed(self, reports):
-        from kajovokarty.application.import_messages import batch_text
-        self.after_mutation()
-        added = sum(r["added"] for r in reports)
-        unsuccessful = sum(r["state"] != "COMPLETED" for r in reports)
-        self.status.setText(f"Načtené platby z Bookingu: {added}. " + (f"Nedokončené soubory: {unsuccessful}; důvody jsou v přehledu výsledků." if unsuccessful else "Všechny vybrané soubory byly zpracovány."))
-        dialog = QDialog(self)
-        dialog.setObjectName("bookingImportResult")
-        dialog.setWindowTitle("Výsledek načtení plateb z Bookingu")
-        dialog.setAttribute(Qt.WA_DeleteOnClose)
-        dialog.resize(860, 600)
-        layout = QVBoxLayout(dialog)
-        text = QPlainTextEdit()
-        text.setReadOnly(True)
-        text.setPlainText(batch_text(reports))
-        layout.addWidget(text)
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        buttons.button(QDialogButtonBox.Close).setText("Zavřít")
-        buttons.rejected.connect(dialog.close)
-        layout.addWidget(buttons)
-        dialog.show()
+        self.preflight(inputs)
 
     def import_preview(self, preview):
+        from kajovokarty.application.import_messages import reason, counter_text
         ambiguous = [e for e in preview.diagnostics if e["code"] == "SHEET_AMBIGUOUS"]
         if ambiguous:
             from dataclasses import replace
@@ -1307,7 +1470,7 @@ class MainWindow(QMainWindow):
                 ("CHYBA" if e.get("severity") == "ERROR" else "UPOZORNĚNÍ")
                 + " · " + str(e.get("file") or "")
                 + (f" · řádek {e['row_start']}" if e.get("row_start") else "")
-                + ": " + e["message"] + " (" + e["code"] + ")"
+                + ": " + reason(e) + " (" + e["code"] + ")"
                 for e in preview.diagnostics
             )
             + "\n\nPodrobnosti souborů:\n"
@@ -1315,15 +1478,12 @@ class MainWindow(QMainWindow):
             "\n".join(
                 f.name
                 + " · "
-                + ("STORED_SNAPSHOT" if f.request.source_file_id else "EXTERNAL_FILE")
-                + " · "
-                + f.sha256
+                + ("Uložená kopie" if f.request.source_file_id else "Vybraný soubor")
                 + "\n"
-                + canonical(f.parsed.counters if f.parsed else {})
+                + counter_text(f.parsed.counters if f.parsed else {})
                 for f in preview.files
             )
-            + "\n\n"
-            + "\n".join(canonical(e) for e in preview.diagnostics)
+
         )
         layout.addWidget(box)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -1420,7 +1580,7 @@ class MainWindow(QMainWindow):
             result = error.details.get("auto_result")
             if result:
                 show_result(self, result, error)
-                self.status.setText(error.message)
+                self.status.setText(error.user_message)
             else:
                 self.show_error(error)
 
@@ -1519,7 +1679,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(d)
         layout.addWidget(
             QLabel(
-                f"Rozdíl {display_money(e['difference'])} {e['object']['currency']} · listů {len(e['leaves'])}"
+                f"Rozdíl {display_money(e['difference'])} {e['object']['currency']} · počet plateb {len(e['leaves'])}"
             )
         )
         from kajovokarty.ui.evidence_tree import EvidenceTree, EvidenceItem, RAW_ROLE
@@ -1685,8 +1845,11 @@ class MainWindow(QMainWindow):
             )
             return
         anchor = selected[0]
+        view_revision = self.live_view_revision
 
         def show(rows):
+            if view_revision != self.live_view_revision:
+                return
             d = QDialog(self)
             d.setWindowTitle("Možné protějšky · " + anchor["primary_identifier"])
             d.resize(1050, 620)
@@ -1703,9 +1866,10 @@ class MainWindow(QMainWindow):
             )
             table.dropHint.connect(self.status.setText)
             model = TableModel(
-                rows, WORK_COLUMNS + [("pair_difference", "Rozdíl po spojení")]
+                rows, payment_columns()
             )
             table.setModel(model)
+            hide_payment_columns(table, model.columns)
             table.setSelectionBehavior(QAbstractItemView.SelectRows)
             table.setSelectionMode(QAbstractItemView.ExtendedSelection)
             layout.addWidget(table)
@@ -1823,7 +1987,7 @@ class MainWindow(QMainWindow):
         text_dialog(
             self,
             "Nápověda",
-            "1. Importovat → zvolit zdroj a úplné exporty → zkontrolovat náhled → Importovat.\n2. Importovat Účty (XLS): Variabilní symbol, Číslo rezervace a Original ID.\n3. Spustit automatické párování výslovným tlačítkem.\n4. Ručně: přetáhnout platbu na protějšek nebo skupinu. Členy upravíte v Párovací ploše; vytažením do zóny Rozpárovat je uvolníte. CZK a EUR nelze spojit. Rozdíl musí být přesně nula pro Vyřízeno.\n5. Rozložení zachová podskupiny. Ctrl+Z / Ctrl+Y vrací platné příkazy. Import se nevrací.\n6. Každý sloupec: šipka v záhlaví otevře filtr hodnot; kliknutí na název přepíná řazení. Sestavy: CSV jako ZIP, XLSX, PDF.\n7. Zálohy obsahují také importované vazby z Účtů.\n\nKlávesy: Ctrl+I import, Ctrl+F hledání, Ctrl+Space výběr, Ctrl+M skupina, Enter detail, F2 poznámka, F5 místní obnova.\n\nVývojová verze 0.4.0 — rozsah ověření a zbývající omezení jsou v docs/VALIDATION.md repozitáře.",
+            "1. Importovat → zvolit zdroj a soubory → průběh → výsledek → Hotovo.\n2. Importovat Účty (XLS): Variabilní symbol, Číslo rezervace a Original ID.\n3. Spustit automatické párování výslovným tlačítkem.\n4. Ručně: přetáhnout platbu na protějšek nebo skupinu. Přetažení mění pracovní návrh; potvrďte jej tlačítkem Uložit skupinu. CZK a EUR nelze spojit. Rozdíl musí být přesně nula pro Vyřízeno.\n5. Skupiny mají přímé platební členy, ne podskupiny. Ctrl+Z / Ctrl+Y vrací platné příkazy. Import se nevrací.\n6. Každý sloupec: šipka v záhlaví otevře filtr hodnot; kliknutí na název přepíná řazení. Sestavy: CSV jako ZIP, XLSX, PDF.\n7. Zálohy obsahují také importované vazby z Účtů.\n\nKlávesy: Ctrl+I import, Ctrl+F hledání, Ctrl+Space výběr, Ctrl+M skupina, Enter detail, F2 poznámka, F5 místní obnova.\n\nVerze 0.4.5. Automatika spojuje dvojice i vyrovnané součtové skupiny. Tolerance je dva pracovní dny bez víkendů a českých svátků. Booking přes Účty má přednost. Storno pokladny lze započíst s opačnou částkou do dvou kalendářních dnů. V Nastavení najdete přehled chyb a upozornění.",
         )
 
     def save_filter(self):
@@ -1935,6 +2099,8 @@ class MainWindow(QMainWindow):
     def column_menu(self, pos):
         menu = QMenu(self)
         for i, (key, label) in enumerate(self.model.columns):
+            if self.scope in (0, 1, 4) and key in HIDDEN_PAYMENT_COLUMNS:
+                continue
             action = menu.addAction(label)
             action.setCheckable(True)
             action.setChecked(not self.table.isColumnHidden(i))
@@ -1944,10 +2110,19 @@ class MainWindow(QMainWindow):
         menu.exec(self.table.horizontalHeader().mapToGlobal(pos))
 
     def dragEnterEvent(self, event):
+        if WorkTable.decode(event.mimeData(), self.workspace_id):
+            event.acceptProposedAction()
+            return
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
 
     def dropEvent(self, event):
+        payload = WorkTable.decode(event.mimeData(), self.workspace_id)
+        if payload:
+            self.panel_drop(payload, None)
+            event.setDropAction(Qt.MoveAction)
+            event.accept()
+            return
         paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
         if not paths:
             return
@@ -1957,15 +2132,36 @@ class MainWindow(QMainWindow):
         if ok:
             self.preflight([ImportInput(SOURCE_NAMES[name], p) for p in paths])
 
+    def stop_background_activity(self):
+        self.shutting_down = True
+        for timer in self.findChildren(QTimer):
+            timer.stop()
+        if self.focus_callback is not None:
+            QApplication.instance().focusChanged.disconnect(self.focus_callback)
+            self.focus_callback = None
+
     def closeEvent(self, event):
         if self.jobs:
             self.status.setText("Dokončete nebo zrušte běžící operaci před zavřením.")
             event.ignore()
+        elif getattr(self, "pair_panel", None) is not None and self.pair_panel.dirty:
+            answer = QMessageBox.question(
+                self,
+                "NevyÄtenĂ© zmÄ›ny",
+                "V pĂˇrovacĂ­ ploĹˇe jsou neuloĹľenĂ© zmÄ›ny. UloĹľit pĹ™ed ukonÄenĂ­m?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save,
+            )
+            if answer == QMessageBox.Cancel:
+                event.ignore()
+                return
+            if answer == QMessageBox.Save:
+                self.save_panel_draft()
+                if self.pair_panel.dirty:
+                    event.ignore()
+                    return
+            self.stop_background_activity()
+            event.accept()
         else:
-            self.search_timer.stop()
-            self.panel_timer.stop()
-            self.view_timer.stop()
-            if self.focus_callback is not None:
-                QApplication.instance().focusChanged.disconnect(self.focus_callback)
-                self.focus_callback = None
+            self.stop_background_activity()
             event.accept()

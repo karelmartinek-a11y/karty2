@@ -1,0 +1,13 @@
+{
+  "packaged_modules_match_source": [
+    "kajovokarty",
+    "kajovokarty.domain.columns",
+    "kajovokarty.domain.errors",
+    "kajovokarty.application.work_query",
+    "kajovokarty.ui.models",
+    "kajovokarty.ui.main",
+    "kajovokarty.ui.pairing_panel"
+  ],
+  "version": "0.4.3",
+  "exe_sha256": "cde7e715e50eb2ef1a4c9486f37c0a2fa3b58aa05c976aaead50fa074c7a5cff"
+}

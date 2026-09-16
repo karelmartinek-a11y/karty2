@@ -12,7 +12,6 @@ from kajovokarty.domain.core import (
     search_tokens,
     uid,
 )
-from kajovokarty.application.helper_report import build_helpers
 from kajovokarty.application.work_query import choices, FIELDS
 from kajovokarty.application.work import WorkService
 
@@ -464,6 +463,7 @@ class ReportService:
                     )
                 ]
             if report_id == "import_errors":
+                from kajovokarty.domain.errors import user_text
                 import_files = import_runs = None
                 if ids is None and filters.get("import_columns"):
                     from kajovokarty.domain.columns import filter_rows
@@ -484,6 +484,7 @@ class ReportService:
                     {
                         **dict(r),
                         "diagnostic_id": r["id"],
+                        "message": user_text(r["code"]),
                         "operation_id": r["run_id"],
                         "file_hash": r["sha256"],
                         "source_identity": r["identity"],
@@ -575,7 +576,7 @@ class ReportService:
             metadata = {
                 "report_schema_id": "KAJOVOKARTY-EXPORT-1",
                 "report_id": report_id,
-                "app_build": "0.4.0",
+                "app_build": "0.4.5",
                 "exported_at": now(),
                 "database_snapshot_id": uid(),
                 "selection_mode": "SINGLE_OBJECT"

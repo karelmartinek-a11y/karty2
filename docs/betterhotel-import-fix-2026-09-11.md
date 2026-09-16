@@ -1,3 +1,5 @@
+> Historický dokument; aktuální pravidla a výsledky jsou v [SSOT](SSOT.md) a [auditu 0.4.5](AUDIT_0_4_5.md). Níže zachovaný obsah popisuje tehdejší stav.
+
 # BetterHotel: položky faktur a průběh importu
 
 ## Zjištěná příčina

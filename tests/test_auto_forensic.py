@@ -171,15 +171,16 @@ def test_per_currency_summary_matches_actual_full_database(db, importer, fixture
         ).id
     )
     result = service(db).run()
-    assert result["analyzed_leaves"] == 1055 and result["created_groups"] == 0
+    assert result["analyzed_leaves"] == 1055 and result["created_groups"] == 4
+    assert result['groups_by_rule'] == {'A_CASH': 4}
     assert all(
         result["by_currency"][cur]["analyzed_leaves"] > 0 for cur in ("CZK", "EUR")
     )
     assert (
-        sum(v["remaining_free_leaves"] for v in result["by_currency"].values()) == 1055
+        sum(v["remaining_free_leaves"] for v in result["by_currency"].values()) == 1047
     )
     assert (
-        sum(sum(v["reasons"].values()) for v in result["by_currency"].values()) == 1055
+        sum(sum(v["reasons"].values()) for v in result["by_currency"].values()) == 1047
     )
 
 

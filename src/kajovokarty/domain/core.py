@@ -23,10 +23,15 @@ class AppError(Exception):
         self.retryable = retryable
         self.operation_id = None
 
+    @property
+    def user_message(self):
+        from kajovokarty.domain.errors import user_text
+        return user_text(self.code)
+
     def as_dict(self):
         return dict(
             code=self.code,
-            message=self.message,
+            message=self.user_message,
             details=self.details,
             retryable=self.retryable,
             operation_id=self.operation_id,

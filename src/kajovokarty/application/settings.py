@@ -11,7 +11,7 @@ DEFAULTS = {
     "sync.timeout_seconds": 30,
     "sync.retry_count": 3,
     "sync.requests_per_second": "2.0",
-    "matching.bank_window_days": 7,
+    "matching.business_window_days": 2,
     "matching.max_combination": 6,
     "matching.max_component_items": 40,
     "matching.max_search_states": 100000,
@@ -37,7 +37,7 @@ RANGES = {
     "sync.block_days": (1, 31),
     "sync.timeout_seconds": (5, 120),
     "sync.retry_count": (0, 5),
-    "matching.bank_window_days": (0, 30),
+    "matching.business_window_days": (0, 30),
     "matching.max_combination": (2, 10),
     "matching.max_component_items": (2, 100),
     "matching.max_search_states": (1000, 1000000),
@@ -64,13 +64,16 @@ class SettingsService:
             Path.home() / "Documents" / "KajovoKarty"
         )
         with self.db.connect() as c:
-            return {
+            result = {
                 **defaults,
                 **{
                     r["key"]: json.loads(r["value_json"])
                     for r in c.execute("SELECT * FROM setting")
                 },
             }
+
+        self.db.log.retention_days = result["diagnostics.log_retention_days"]
+        return result
 
     def save(self, values, _connection=None):
         from urllib.parse import urlparse

@@ -3,12 +3,11 @@ import json
 from kajovokarty.domain.core import digest, require
 from kajovokarty.application.auto_run import AutoRun
 from kajovokarty.domain.matching import (
-    bank_edges,
     isolated,
     reversals,
-    terminal_edges,
 )
 from kajovokarty.application.work import WorkService
+from kajovokarty.domain.matching_windows import business_days, match_date, within, compatible, sum_candidates, cash_reversals
 
 
 class MatchingService:
@@ -53,6 +52,21 @@ class MatchingService:
         rounds = created = 0
         suppressed = set()
         chain_reasons = {}
+        window = settings['matching.business_window_days']
+        # Suppress the same leaves across rules and inside larger groups too.
+        banned_sets = []
+        with self.db.connect() as c:
+            active_bans = {r[0] for r in c.execute('SELECT fingerprint FROM auto_suppression WHERE active=1')}
+            for group in c.execute('SELECT object_id,evidence_json FROM reconciliation_group'):
+                if json.loads(group['evidence_json']).get('fingerprint') not in active_bans:
+                    continue
+                leaves = c.execute('''WITH RECURSIVE descendants(id) AS (
+                    SELECT child_id FROM membership WHERE parent_id=?
+                    UNION SELECT m.child_id FROM membership m JOIN descendants d ON m.parent_id=d.id
+                ) SELECT d.id FROM descendants d JOIN work_object w ON w.id=d.id WHERE w.type='SOURCE' ''', (group['object_id'],))
+                ids = frozenset(r[0] for r in leaves)
+                if ids:
+                    banned_sets.append(ids)
 
         def chain(row):
             matches = references.get(row["payload"].get("variable_symbol"), [])
@@ -75,18 +89,55 @@ class MatchingService:
                 ch = chains[r["id"]] = chain(r)
                 if ch[0] == "BOOKING":
                     for b in index.get((ch[1], r["currency"], r["signed_amount_minor"]), []):
-                        candidates.append(frozenset((r["id"], b["id"])))
+                        if within([r, b], window):
+                            candidates.append(frozenset((r["id"], b["id"])))
             return candidates, chains, set(), set()
+
+        def candidates_b_date(rows):
+            """Fallback Booking match using checkout date, amount and currency.
+
+            A confirmed Accounts reference remains the stronger source of truth;
+            those cashbook rows are intentionally excluded from this fallback.
+            """
+            index, candidates = {}, []
+            run.stage("Booking — shoda data odjezdu, měny a částky", len(rows))
+            for r in rows:
+                if r["kind"] == "BOOKING":
+                    departure = r["payload"].get("departure")
+                    if departure:
+                        index.setdefault(
+                            (departure[:10], r["currency"], r["signed_amount_minor"]),
+                            [],
+                        ).append(r)
+            for r in run.track(rows):
+                if r["kind"] != "CASHBOOK_CARD":
+                    continue
+                if references.get(r["payload"].get("variable_symbol")):
+                    continue
+                for b in index.get(
+                    (r["local_date"], r["currency"], r["signed_amount_minor"]),
+                    [],
+                ):
+                    candidates.append(frozenset((r["id"], b["id"])))
+            return candidates
 
         def commit(rule, candidates, rows, proofs=None, legacy_proofs=None):
             nonlocal created
             lookup = {r["id"]: r for r in rows}
             count = 0
             matches = isolated(candidates)
+            accepted = set(matches)
+            for candidate in candidates:
+                self.db.log.event("AUTO_CANDIDATE", operation_id=run.op, rule_id=rule,
+                                  source_ids=sorted(candidate), state="ISOLATED" if candidate in accepted else "AMBIGUOUS")
             names = {
                 "A": "Bankovní storna",
+                "A_CASH": "Storna pokladny do dvou kalendářních dnů",
+                "B_SUM": "Booking a pokladna podle součtu",
+                "C_SUM": "Terminál a pokladna podle součtu",
                 "B": "Booking a pokladna",
-                "C_TERMINAL": "Terminál a pokladna podle dne a částky",
+                "B_DATE": "Booking a pokladna podle data odjezdu a částky",
+                "C_TERMINAL": "Terminál a pokladna podle částky a pracovních dnů",
                 "C_STRONG": "Banka se shodným VS",
                 "C_WEAK": "Banka podle částky a dokladů",
                 "D": "Protizápisy Bookingu",
@@ -180,13 +231,15 @@ class MatchingService:
                         "SELECT 1 FROM auto_suppression WHERE fingerprint IN (" + ",".join("?" for _ in fingerprints) + ") AND active=1",
                         tuple(fingerprints),
                     ).fetchone()
-                if supp:
+                if supp or any(ban <= ids for ban in banned_sets):
+                    self.db.log.event("AUTO_SUPPRESSED", operation_id=run.op, rule_id=rule, source_ids=sorted(ids))
                     suppressed.update(ids)
                     run.step_done += 1
                     run.emit_progress()
                     continue
                 evidence = {
                     "rule_id": rule,
+                    "matching_contract": "KK-MATCH-3",
                     "auto_run_id": run.op,
                     "fingerprint": finger,
                     "evidence_hash": evidence_hash,
@@ -197,6 +250,17 @@ class MatchingService:
                         if "helper_provenance" in p
                     ]
                     or None,
+                }
+                dates = {r['id']: match_date(r) for r in chosen}
+                evidence['matching_dates'] = dates
+                evidence['business_window_days'] = window
+                if rule == 'A_CASH':
+                    evidence['calendar_window_days'] = 2
+                if all(dates.values()):
+                    evidence['business_day_span'] = business_days(min(dates.values()), max(dates.values()))
+                evidence['source_totals_minor'] = {
+                    kind: sum(r['signed_amount_minor'] for r in chosen if r['kind'] == kind)
+                    for kind in {r['kind'] for r in chosen}
                 }
                 self.work.create_group(
                     [r["id"] for r in chosen],
@@ -224,57 +288,56 @@ class MatchingService:
                 "Párování bylo zrušeno.",
             )
             rows = self._free()
+            cash_stornos = cash_reversals([r for r in rows if r['kind'] == 'CASHBOOK_CARD'], pulse)
+            count += commit('A_CASH', cash_stornos, rows)
+            rows = self._free()
             bank = [r for r in rows if r["kind"] == "BANK_CARD"]
             run.stage("Bankovní storna — prověřování transakcí", len(bank))
             ac = reversals(bank, pulse, track=run.track)
             count += commit("A", ac, rows)
             rows = self._free()
-            cash = [r for r in rows if r["kind"] == "CASHBOOK_CARD"]
-            bank = [r for r in rows if r["kind"] == "BANK_CARD"]
-            run.stage(
-                "Terminál — hledání shod podle dne, měny a částky",
-                len(cash),
-                "pokladních položek",
-            )
-            terminal = terminal_edges(cash, bank, pulse=pulse, track=run.track)
-            count += commit("C_TERMINAL", terminal, rows)
-            rows = self._free()
             bc, chains, unknown, blocked = candidates_b(rows)
             count += commit("B", bc, rows, chains)
+            extra_candidates, sum_ambiguous, sum_blocked = [], set(), set()
+            for phase_window in dict.fromkeys((0, window)):
+                for kind, pair_rule, sum_rule in (('BOOKING', 'B_DATE', 'B_SUM'), ('BANK_CARD', 'C_TERMINAL', 'C_SUM')):
+                    def eligible(snapshot):
+                        return [r for r in snapshot if r['kind'] == kind or (
+                            r['kind'] == 'CASHBOOK_CARD' and (kind != 'BOOKING'
+                            or not references.get(r['payload'].get('variable_symbol'))))]
+
+                    rows = self._free()
+                    available = eligible(rows)
+                    cash = [r for r in available if r['kind'] == 'CASHBOOK_CARD']
+                    other = [r for r in available if r['kind'] == kind]
+                    pairs = []
+                    run.stage('Hledání kandidátů podle částky a pracovních dnů', len(cash), 'pokladních položek')
+                    for a in run.track(cash):
+                        for index, b in enumerate(other):
+                            if index % 1024 == 0:
+                                pulse()
+                            if (a['currency'] == b['currency']
+                                    and a['signed_amount_minor'] == b['signed_amount_minor']
+                                    and within([a, b], phase_window) and compatible(a, b)):
+                                pairs.append(frozenset((a['id'], b['id'])))
+                    extra_candidates.extend(pairs)
+                    count += commit(pair_rule, pairs, rows)
+                    rows = self._free()
+                    run.stage('Hledání vyrovnaných součtových skupin')
+                    sums, ambiguous, limited = sum_candidates(
+                        eligible(rows), phase_window,
+                        settings['matching.max_combination'], settings['matching.max_component_items'],
+                        settings['matching.max_search_states'], pulse, run.search_progress)
+                    sum_ambiguous.update(ambiguous)
+                    sum_blocked.update(limited)
+                    if limited:
+                        run.limits.add((kind, phase_window, tuple(sorted(limited))))
+                    count += commit(sum_rule, sums, rows)
+            # Recompute reasons from the actual remaining snapshot on the final round.
             rows = self._free()
-            cash = [r for r in rows if r["kind"] == "CASHBOOK_CARD"]
-            bank = [r for r in rows if r["kind"] == "BANK_CARD"]
-            run.stage(
-                "Banka — hledání přesné shody VS a částky",
-                len(cash),
-                "pokladních položek",
-            )
-            strong = bank_edges(
-                cash,
-                bank,
-                settings["matching.bank_window_days"],
-                pulse=pulse,
-                track=run.track,
-            )
-            count += commit("C_STRONG", strong, rows)
-            rows = self._free()
-            cash = [r for r in rows if r["kind"] == "CASHBOOK_CARD"]
-            bank = [r for r in rows if r["kind"] == "BANK_CARD"]
-            run.stage(
-                "Banka — hledání přesné shody VS a částky",
-                len(cash),
-                "pokladních položek",
-            )
-            strong = bank_edges(
-                cash,
-                bank,
-                settings["matching.bank_window_days"],
-                pulse=pulse,
-                track=run.track,
-            )
-            # Weak bank and Booking reversal rules relied on retired API evidence.
-            weak, d = [], []
             bc, chains, unknown, blocked = candidates_b(rows)
+            blocked.update(sum_blocked)
+            bdate = candidates_b_date(rows)
             book = [r for r in rows if r["kind"] == "BOOKING"]
             if not count:
                 break
@@ -289,9 +352,12 @@ class MatchingService:
             ).fetchone()[0]
             from collections import Counter
 
-            degree = Counter(
-                i for candidate in [*ac, *bc, *strong, *weak, *d] for i in candidate
-            )
+            free_ids = {r['id'] for r in rows}
+            remaining_candidates = {ids for ids in [*ac, *cash_stornos, *bc, *bdate, *extra_candidates] if ids <= free_ids}
+            degree = Counter(i for candidate in remaining_candidates for i in candidate)
+            ambiguous_ids = {i for candidate in remaining_candidates
+                             if any(degree[j] > 1 for j in candidate) for i in candidate}
+            ambiguous_ids.update(sum_ambiguous)
             for row in rows:
                 run.check_cancel()
                 i = row["id"]
@@ -307,18 +373,21 @@ class MatchingService:
                     code = "AUTO_SUPPRESSED"
                 elif i in blocked:
                     code = "AUTO_SEARCH_LIMIT"
-                elif degree[i] > 1:
+                elif i in ambiguous_ids:
                     code = "MULTIPLE_CANDIDATES"
                 elif (
                     row["kind"] == "CASHBOOK_CARD"
                     and chains.get(i, (None,))[0] == "BOOKING"
                 ):
                     ref = chains[i][1]
-                    code = (
-                        "AMOUNT_MISMATCH"
-                        if any(b["payload"]["booking_reference"] == ref for b in book)
-                        else "BOOKING_REFERENCE_NOT_FOUND"
-                    )
+                    related = [b for b in book if b["payload"]["booking_reference"] == ref]
+                    code = ("BOOKING_REFERENCE_NOT_FOUND" if not related else
+                            "CURRENCY_MISMATCH" if not any(b["currency"] == row["currency"] for b in related)
+                            else "AMOUNT_MISMATCH" if not any(
+                                b['currency'] == row['currency']
+                                and b['signed_amount_minor'] == row['signed_amount_minor'] for b in related)
+                            else "MATCH_DATE_OUTSIDE_WINDOW")
+                self.db.log.event("AUTO_UNMATCHED", operation_id=run.op, source_id=i, error_code=code)
                 c.execute(
                     "INSERT OR REPLACE INTO work_reason VALUES(?,?,?,?,?)",
                     (i, code, domain_revision, st["revision"], settings_revision),

@@ -9,6 +9,8 @@ from PySide6.QtTest import QTest
 from kajovokarty.ui.main import MainWindow
 from test_acceptance_traces import seed
 from test_gui import spin
+from kajovokarty.application.matching import MatchingService
+from kajovokarty.application.settings import SettingsService
 
 
 @pytest.mark.parametrize("outcome", ["complete", "cancel", "error"])
@@ -53,7 +55,7 @@ def test_live_popup_reports_commits_and_closes_after_terminal_state(
         assert dialog.values["resolved"].text() == "2"
         assert dialog.values["remaining"].text() == "2"
         assert "EUR: spárováno 2, zbývá 2" in dialog.currencies.text()
-        assert "VS" in dialog.phase.text()
+        assert "Terminál a pokladna" in dialog.phase.text()
         assert "Dokončeno 1 z 2" in dialog.detail.text()
         assert dialog.bar.value() == 500
         with db.connect() as c:
@@ -102,3 +104,30 @@ def test_live_popup_reports_commits_and_closes_after_terminal_state(
                 dialog.finish()
         window.close()
         app.processEvents()
+
+
+def test_sum_group_progress_counts_four_payments_and_search_states(db):
+    for n in (1, 2):
+        seed(db, 'CASHBOOK_CARD', vs=str(n), minute=f'{n:02d}')
+        seed(db, 'BANK_CARD', vs=None, seq=str(n))
+    snapshots = []
+    result = MatchingService(db, SettingsService(db)).run(
+        progress=lambda event: snapshots.append(event.snapshot))
+    assert result['created_groups'] == 1
+    assert result['newly_resolved_leaves'] == 4
+    assert snapshots[-1]['groups'] == 1
+    assert snapshots[-1]['resolved'] == 4
+    for snapshot in snapshots:
+        assert snapshot['remaining'] == snapshot['total'] - snapshot['resolved']
+        if snapshot['step_total'] is not None:
+            assert 0 <= snapshot['step_done'] <= snapshot['step_total']
+
+
+def test_sum_search_reports_state_counts():
+    from kajovokarty.domain.matching_windows import sum_candidates
+    from test_matching_windows import row
+    counts = []
+    rows = [row('c1', 'CASHBOOK_CARD', 100), row('c2', 'CASHBOOK_CARD', 100),
+            row('b', 'BANK_CARD', 100)]
+    sum_candidates(rows, 2, search_progress=counts.append)
+    assert counts[0] == 0 and counts[-1] > 0

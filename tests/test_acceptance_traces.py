@@ -7,7 +7,7 @@ from kajovokarty.application.matching import MatchingService
 from kajovokarty.application.settings import SettingsService
 
 
-def seed(db, kind, amount="50.00", vs="20260001", seq="000001", minute="00", currency="EUR", day="07"):
+def seed(db, kind, amount="50.00", vs="20260001", seq="000001", minute="00", currency="EUR", day="07", departure="2026-09-08"):
     if kind == "CASHBOOK_CARD":
         source, _, _ = cash(
             dict(
@@ -44,7 +44,7 @@ def seed(db, kind, amount="50.00", vs="20260001", seq="000001", minute="00", cur
                 invoice_type="Reservation",
                 booking_reference="1234567890",
                 arrival="2026-09-07",
-                departure="2026-09-08",
+                departure=departure,
                 guest_name="Synthetic",
                 provider="Booking.com",
                 reservation_status="ok",

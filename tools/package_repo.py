@@ -7,6 +7,8 @@ import tomllib
 import zipfile
 
 EXCLUDED = {
+    "logs", "backups", "diagnostics",
+    ".tmp",
     ".git",
     ".venv",
     "venv",
@@ -22,6 +24,14 @@ EXCLUDED = {
     ".idea",
     ".vscode",
 }
+
+
+def private_artifact(path):
+    """Never ship local databases, journals, credentials or diagnostic logs."""
+    name = path.name.lower()
+    return (path.suffix.lower() in {'.db', '.sqlite', '.sqlite3', '.log', '.jsonl', '.bak', '.pfx', '.p12', '.key'}
+            or name == '.env' or name.startswith('.env.')
+            or name.endswith(('-wal', '-shm', '-journal')))
 
 
 def main():
@@ -43,10 +53,11 @@ def main():
         rel = p.relative_to(root)
         if any(part in EXCLUDED or part.endswith(".egg-info") for part in rel.parts):
             continue
-        if p.is_symlink():
+        if p.is_symlink() or p.is_junction():
             raise SystemExit(f"Symlink cannot be packaged: {rel}")
         if (
             p.is_file()
+            and not private_artifact(p)
             and p.suffix not in {".pyc", ".pyo", ".sqlite", ".tmp"}
             and not p.name.endswith((".sqlite-wal", ".sqlite-shm"))
             and rel.as_posix() != "MANIFEST.sha256"

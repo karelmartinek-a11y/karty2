@@ -1,0 +1,2 @@
+﻿Typ transakce,ID Terminálu,ID POS,Datum a čas vzniku,Čas připsání na server,Datum zaúčtování,Částka,Cashback,Spropitné,Měna,ARN kód,DCC,Číslo karty/Číslo účtu,Autoriz. kód,Var. symbol,Var. symbol 2,SEQ ID,Vydavatel karty,Způsob načtení karty,Obchodní místo,Adresa obchodního místa
+Prodej,SYNTHETIC-TERM,,07.09.2026 12:02:00,,,50.00,,,EUR,,,,,20260001,,000001,,,,

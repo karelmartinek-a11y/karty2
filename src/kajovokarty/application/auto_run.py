@@ -113,6 +113,7 @@ class AutoRun:
         self.last_event = current
 
     def stage(self, label, total=None, unit="položek"):
+        self.db.log.event("AUTO_STAGE", operation_id=getattr(self, "op", None), stage=label, count=total)
         self.stage_label, self.step_total, self.unit = label, total, unit
         self.step_done = 0
         self.search_states = None
@@ -169,6 +170,7 @@ class AutoRun:
         ).fetchone()[0]
 
     def record(self, rule, rows):
+        self.db.log.event("AUTO_PAIR_COMMITTED", operation_id=self.op, rule_id=rule, source_ids=[r["id"] for r in rows])
         self.created += 1
         self.resolved += len(rows)
         currency = rows[0]["currency"]
@@ -264,6 +266,7 @@ class AutoRun:
             self.finish(result)
             return result
         except Exception as cause:
+            self.db.log.exception("AUTO_FAILED", cause, operation_id=self.op)
             error = (
                 cause
                 if isinstance(cause, AppError)

@@ -1,4 +1,4 @@
-> Historický protokol verze 0.2.0. Aktuální změny a nové ověření 0.3.0: [docs/UI_WORKFLOW.md](docs/UI_WORKFLOW.md).
+> Historický protokol verze 0.2.0. Aktuální specifikace: [SSOT](docs/SSOT.md); aktuální předání a ověření: [audit 0.4.5](docs/AUDIT_0_4_5.md).
 
 # Dodávka KájovoKarty 0.2.0
 

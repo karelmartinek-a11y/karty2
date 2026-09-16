@@ -1,24 +1,26 @@
 # Účty: ruční import a párování
 
-Tento kontrakt verze 0.4.0 nahrazuje části staršího SSOT popisující živé BetterHotel API, tokeny, automatické pravidlo B a pravidla C_WEAK/D závislá na API. Historické protokoly API zůstávají archivními záznamy.
+Aktuální autoritou je [SSOT](SSOT.md). Původní kontrakt verze 0.4.0 nahrazuje části staršího SSOT popisující živé BetterHotel API, tokeny, automatické pravidlo B a pravidla C_WEAK/D závislá na API. Historické protokoly API zůstávají archivními záznamy.
 
 ## Import
 
-V Importech nebo v nabídce Importovat zvolte Účty (XLS). Export musí obsahovat jednou každou hlavičku Variabilní symbol, Číslo rezervace a Original ID; pořadí sloupců se může lišit. Další sloupce se nevytěžují. Původní soubor se uchovává pro audit stejně jako ostatní importy.
+V Importech nebo v nabídce Importovat zvolte Účty (XLS). Export musí obsahovat jednou každou hlavičku Variabilní symbol, Číslo rezervace a Original ID; pořadí sloupců se může lišit. Další sloupce se nevytěžují. Původní soubor se uchovává pro audit stejně jako ostatní importy. Po výběru souborů začne import automaticky ve společném průběhovém okně. Výsledek vykazuje nové a již uložené vazby, neúplné a rozporné řádky a čeká na stisknutí Hotovo.
 
 Řádky bez některého ze tří identifikátorů se přeskočí. Okolní mezery se odstraní, textové počáteční nuly zůstanou. První přijaté Original ID pro číslo rezervace BetterHotelu platí trvale. Přesné duplicity se ignorují. Stejnou dvojici s dalším VS lze doplnit; jiný Booking identifikátor pro známou rezervaci se ignoruje včetně nového VS. Pořadí při prvním importu je pořadí vybraných souborů a řádků.
 
-Náhled ukazuje nové vazby, duplicity, konflikty a neúplné řádky. Potvrzení atomicky znovu vyhodnotí duplicity proti aktuální databázi. Import neprovádí párování ani nerozpojuje existující skupiny. Pomocná data a sestava Pomocná data zobrazují importované vazby a původ.
+Průběh a výsledek ukazují nové vazby, duplicity, konflikty a neúplné řádky. Uložení atomicky znovu vyhodnotí duplicity proti aktuální databázi. Import neprovádí párování ani nerozpojuje existující skupiny. Pomocná data a sestava Pomocná data zobrazují importované vazby a původ.
 
 ## Automatika
 
 Pravidlo B použije VS volné položky pokladny k vyhledání právě jedné rezervace v Účtech. Original ID musí odpovídat číslu rezervace volné Booking platby. Částka včetně znaménka musí být přesně stejná v nejmenší měnové jednotce a měna musí být shodná. Nevytvářejí se součtové kombinace. Při více vhodných protějšcích na kterékoli straně zůstává případ ruční.
 
-Zůstává pořadí nezávislých pravidel: bankovní storna, terminál podle dne/měny/částky, Booking přes Účty, banka podle VS. Stávající pravidlo terminálu se nemění. Pravidla slabé bankovní shody a Booking protizápisů vyžadující API důkazy se již nespouštějí.
+Pravidlo přes Účty má přednost před náhradními shodami podle data a částky. Pomocná vazba sama neblokuje terminálové párování při chybějící nebo odlišné Booking platbě. Booking fallback nepoužije pokladnu s existující pomocnou vazbou proti jiné rezervaci. Nejednoznačné případy zůstávají ruční. Další pravidla podporují součtové skupiny podle aktuálního SSOT; platí pracovní datumové okno, výchozí dva pracovní dny. Pravidla slabé bankovní shody a Booking protizápisů vyžadující API důkazy se již nespouštějí.
 
 Důkaz nové Booking skupiny obsahuje použitý VS, obě rezervace, soubor, import, list a řádek. Dokončené skupiny, ruční zásahy a zákazy opětovného automatického spojení zůstávají zachované.
 
-## Migrace a ověření
+## Historie migrace a původní ověření
+
+Aktuální schéma je 4 a výsledky vydání 0.4.5 jsou v [auditu](AUDIT_0_4_5.md). Níže uvedené počty a postupy jsou historické.
 
 Schéma 3 přidává append-only tabulky account_reservation a account_symbol. Před aktualizací existující databáze vzniká ověřená záloha. Migrace odstraní uložená přihlašovací tajemství; staré finanční důkazy zachová. Záloha a obnova zahrnují nové tabulky.
 

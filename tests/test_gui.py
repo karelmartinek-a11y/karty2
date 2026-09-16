@@ -46,7 +46,7 @@ def test_actual_widgets_import_select_group(db, fixtures):
     spin(lambda: window.model.rowCount() == 21 and not window.busy)
     timer.stop()
     for dialog in window.findChildren(QDialog):
-        if dialog.objectName() == "bookingImportResult":
+        if dialog.objectName() == "importProgressDialog":
             dialog.close()
     selection = window.table.selectionModel()
     selection.select(

@@ -1,29 +1,30 @@
-# KájovoKarty
+# KájovoKarty 0.4.5
 
-Česká desktopová aplikace Python 3.12 / PySide6 pro rekonsiliaci pokladních karet, terminálových transakcí a výplat Booking.com. Data zůstávají v lokální SQLite databázi. BetterHotel API je nahrazeno ručním importem **Účty (XLS)**.
+Lokální česká aplikace Windows / Python 3.12 / PySide6 pro párování karetní pokladny, terminálu a Booking.com. Pracuje s CZK a EUR bez převodů měn. Data jsou v SQLite, pomocné vazby se importují z Účtů (XLS); provoz nepotřebuje API token.
 
-**Verze 0.4.0:** Účty načtou pouze Variabilní symbol, Číslo rezervace a Original ID. Podle VS pokladny se vyhledá Original ID a jednotlivá Booking platba se stejnou rezervací, měnou a přesnou částkou. Součty ani zaokrouhlení se nepoužívají. První dvojice rezervací zůstává neměnná; další VS ke stejné dvojici lze doplnit. Nejednoznačné případy zůstávají ruční. Podrobnosti: [docs/ACCOUNTS_IMPORT.md](docs/ACCOUNTS_IMPORT.md).
+## Aktuální dokumentace
 
-**Verze 0.3.2** přidává živé průběhové okno automatiky: aktuální krok, dokončené a zbývající jednotky kroku, uložené shody po měnách, čas a bezpečné zrušení. Podrobnosti: [docs/AUTO_PROGRESS.md](docs/AUTO_PROGRESS.md).
+- [SSOT — závazná pravidla](docs/SSOT.md)
+- [Pracovní postup a kompaktní tabulky](docs/WORKFLOW_CURRENT.md)
+- [Audit 0.4.5, výsledky a omezení](docs/AUDIT_0_4_5.md)
+- [Import Účtů](docs/ACCOUNTS_IMPORT.md), [Booking](docs/BOOKING_IMPORT.md), [průběh všech importů](docs/IMPORT_PROGRESS.md)
+- [Katalog chyb](docs/ERROR_CATALOG.md)
+- [Přehled dokumentace a historických protokolů](docs/INDEX.md)
 
-Verze 0.3.1 opravuje automatické párování: pouze výslovné tlačítko, kontrola platnosti důkazů při každém zápisu, bezpečné zrušení, trvalý výsledek po měnách a zachování starších zákazů spojení. Forenzní nálezy a testy: [docs/AUTO_AUDIT.md](docs/AUTO_AUDIT.md). Přetahování plateb a Excelové sloupcové filtry z 0.3.0 zůstávají popsané v [docs/UI_WORKFLOW.md](docs/UI_WORKFLOW.md).
+Verzované starší protokoly popisují tehdejší stav, nikoli aktuální chování. Aktuální schéma databáze je **4**, aplikační verze **0.4.5**. Úspěšný test není záruka neexistence dalších vad.
 
-Dodávka obsahuje zdrojový repozitář a předpis sestavení Windows instalátoru. Sestavený EXE není součástí ZIPu. Zjištění z živého BetterHotel API, opravy importu a stav jejich ověření popisuje [protokol z 11. 9. 2026](docs/betterhotel-import-fix-2026-09-11.md). Testování na čistém Windows profilu dosud neproběhlo; úplná akceptace SSOT není prohlášena.
+## Pracovní postup
 
-## Obsah
+1. Importovat → vybrat zdroj a soubory → sledovat průběh → zkontrolovat výsledek → Hotovo. Každý soubor se ukládá atomicky; chyba jednoho nevrací dříve dokončené soubory.
+2. Volitelně importovat Účty (XLS): Variabilní symbol, Číslo rezervace, Original ID.
+3. Výslovně spustit Automaticky spárovat vše. Pořadí a ochrany stanovuje SSOT.
+4. Ručně přidat platby do párovací plochy tlačítkem nebo přetažením. Návrh nic neukládá. Tlačítko Uložit skupinu vytvoří jednu vyrovnanou skupinu; všechny pohledy se aktualizují.
+5. Vyhledat kandidáty nastaví zdrojový filtr na ostatní zdroje podle první položky návrhu. Filtr lze změnit.
+6. Uložené operace lze podle jejich aktuálnosti vracet přes Ctrl+Z / Ctrl+Y. Import se nevrací. Exporty jsou CSV ZIP, XLSX a PDF.
 
-- `src/kajovokarty/domain`: přesné částky, normalizace, Booking reference a kandidátní grafy.
-- `src/kajovokarty/application`: atomické importy, finanční skupiny, Undo/Redo, automatika, reference, sestavy a zálohy; historický pomocný model kvůli starým důkazům.
-- `src/kajovokarty/infrastructure`: XLS/CSV/XLSX parsery, SQLite a migrace a exportní formáty.
-- `src/kajovokarty/ui`: skutečné české PySide6 rozhraní, tabulkové modely a background workery.
-- `docs/SSOT.md`: zadání s aktualizací ovládání 0.3.0 v oddílech 9.4 a 11.6.
-- `fixtures`: všech pět přesně rekonstruovaných souborů přílohy B.
-- `tests`: integrační, doménové, HTTP, vlastnostní a Qt testy.
-- `requirements.lock`, `requirements-dev.lock`: úplné verze závislostí s SHA-256 hashi.
-- `tools/build_windows.ps1`, `KajovoKarty.spec`, `tools/installer.iss`: sestavení offline Windows produktu a instalátoru bez administrátorských práv.
-- `LICENSES`: licence skutečně použitých knihoven a vloženého fontu.
+Automatika zahrnuje jednoznačné dvojice a doložené součtové skupiny. Výchozí tolerance je dva pracovní dny bez víkendů a českých svátků. Booking používá datum odjezdu; pomocné Booking ID neblokuje terminálové párování. Pokladní storno se hledá proti normálnímu záznamu s opačnou částkou do dvou kalendářních dnů. Přesné podmínky, priority a limity jsou v SSOT.
 
-## Spuštění zdrojové verze vývojářem
+## Vývoj a ověření
 
 Windows, Python 3.12 x64:
 
@@ -32,48 +33,26 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --require-hashes -r requirements-dev.lock
 .\.venv\Scripts\python.exe -m pip install --no-deps --no-build-isolation -e .
 .\.venv\Scripts\python.exe -m kajovokarty
+.\.venv\Scripts\python.exe -m ruff check src tests tools --select F --no-cache
+.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider
 ```
 
-Testy:
+Zdrojové složky: domain (finanční pravidla), application (operace), infrastructure (SQLite, import/export, soubory), ui (Qt), migrations (schéma). Testy používají izolované databáze. Historické API moduly existují pro kompatibilitu a testy; současný pracovní postup je nevyžaduje.
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-```
-
-Linux slouží také pro lokální testy a prohlídku rozhraní. Aplikace nevyžaduje API tokeny.
-
-## Windows distribuce
-
-Na Windows s Pythonem 3.12 x64 a Inno Setup 6 spusťte:
+## Sestavení a distribuce
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\build_windows.ps1
 ```
 
-Skript instaluje hashově zamčené vývojové závislosti, spouští testy, sbírá licence, vytvoří PyInstaller onedir a potom EXE instalátor v `dist/installer`. Při chybě kteréhokoli kroku skončí. To není instalace závislostí při startu aplikace: výsledný onedir produkt obsahuje Python, Qt, parsery, font i tzdata.
+Vyžaduje Python 3.12 x64 a Inno Setup 6. Skript používá oddělené prostředí .tmp/build-venv, kontroluje závislosti a testy, sbírá licence, sestaví PyInstaller onedir, provede izolovaný test skutečného EXE a vytvoří instalátor v dist/installer. Selhání zastaví sestavení. Výsledná aplikace obsahuje Python, Qt, parsery, font i tzdata a při spuštění nic neinstaluje. Pomocný start.bat slouží ke spuštění zdrojů a může instalovat hashově zamčené vývojové závislosti.
 
-Aplikace nepoužívá `.env`, aplikační účty ani povinné CLI argumenty. Výchozí data jsou v `LocalAppData/KajovoKarty/data`; odinstalátor je nemaže. Import, start ani filtr samy nespouštějí párování.
+Zdrojový manifest, distribuční hash a auditní protokoly musejí odpovídat stejnému finálnímu stavu. Sestavení instalátoru není dokladem jeho instalace na čistém počítači; skutečný rozsah ověření uvádí audit.
 
-## Základní pracovní postup
+## Data, zálohy a přechod
 
-Booking CSV umožňuje vybrat více souborů najednou a načítá je postupně. Výsledek srozumitelně uvádí počty načtených a vynechaných plateb i důvody. Podrobnosti: [Import plateb z Bookingu](docs/BOOKING_IMPORT.md).
+Výchozí data jsou v LocalAppData/KajovoKarty/data. Odinstalátor je nemaže. Při přechodu ze schématu 3 se před migrací na 4 vytvoří ověřená záloha bez tajemství; starší migrační cesty jsou zachované. Aktivní skupiny ve schématu 4 mají přímé zdrojové členy, historický audit zůstává zachován.
 
-1. Importovat → typ zdroje → soubory → náhled → Importovat.
-2. Importovat → Účty (XLS) → náhled → Importovat. Uložené vazby jsou v Pomocných datech.
-3. Výslovně spustit automatické párování, nebo doplňovat pracovní výběr.
-4. Vytvořit skupinu: nulový rozdíl znamená Vyřízeno, jiný rozdíl otevřenou skupinu. CZK a EUR nelze spojit.
-5. Přetáhnout platbu na jinou platbu nebo skupinu. Párovací plocha ukáže členy a rozdíl; přetažením člena do zóny Rozpárovat jej vyjmete. Každý přesun vrátí Ctrl+Z.
-6. Detail obsahuje jedinečné listy, původní částky, JSON důkaz a audit. Rozložení zachovává podskupiny.
-7. Sestavy lze uložit jako CSV ZIP, XLSX nebo PDF. Nastavení obsahuje zálohu, obnovu, přesun datové složky a anonymní diagnostiku.
+Záloha, obnova a přesun jsou dostupné v Nastavení. Úplný reset vyžaduje samostatné potvrzení VYMAZAT a odstraňuje také rozpoznané zálohy. Není nástrojem pro opravu chybějících oprávnění. Původní importy mimo pracovní prostor a cizí soubory nesmí odstranit.
 
-Původní testovací soubory obsahují údaje z uživatelem dodaného SSOT. Produkční prázdná databáze se těmito daty automaticky neplní.
-
-## Přechod ze starších verzí
-
-Spusťte 0.4.0 nad existující datovou složkou. Před migrací ze schématu 1 nebo 2 vznikne ověřená záloha bez tokenů. Migrace na schéma 3 zachová finanční zdroje, existující skupiny i historii a přidá prázdnou databázi vazeb Účtů. Starý API graf se pro nové párování nepoužívá. Při chybě umístění nebo databáze se otevře zotavení, prázdná náhradní databáze se tiše nevytváří.
-
-Přesun se provádí přes Nastavení a restartuje aplikaci. Původní složka zůstává zachována. Záloha zahrnuje vazby z Účtů a jejich importní původ. Ruční editace SQLite ani bootstrap souboru není běžný pracovní postup.
-
-Verze 0.3.0 používá stejné databázové schéma 2 jako 0.2.0. Nové přesuny využívají existující příkazy, historii a audit; finanční zdroje se nepřepisují.
-
-Automatika běží jen po stisku **Automaticky spárovat vše**, vždy nad celou databází. Výsledek je dostupný i později v Nastavení → operace AUTO_MATCH → detail. Po zrušení zůstanou dokončené skupiny zachovány; pokračování vyžaduje další výslovný stisk tlačítka.
+Toto vydání se ověřuje na izolovaných datech; audit nesmí automaticky opravovat provozní databázi ani instalovat přes používanou aplikaci.

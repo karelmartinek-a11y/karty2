@@ -1,5 +1,6 @@
 """Append-only reservation references from the manual Účty import."""
 
+from kajovokarty.domain.import_progress import notify
 from kajovokarty.domain.core import now, require
 
 
@@ -11,27 +12,37 @@ def classify(c, files):
     for f in files:
         if not f.parsed or f.request.kind != "ACCOUNTS":
             continue
+        f.parsed.diagnostics[:] = [d for d in f.parsed.diagnostics if d["code"] != "ACCOUNTS_CONFLICT"]
+        f.parsed.account_outcomes = [dict(row_start=d["row_start"], disposition="INCOMPLETE")
+                                    for d in f.parsed.diagnostics if d["code"] == "ACCOUNTS_INCOMPLETE"]
         local = dict(new=0, known=0, conflicts=0, incomplete=f.parsed.counters.get("incomplete", 0))
         for row in f.parsed.accounts:
             vs, reservation, booking = (row[k] for k in ("variable_symbol", "reservation", "booking_reference"))
             if reservation in reservations and reservations[reservation] != booking:
+                disposition = "CONFLICT"
                 local["conflicts"] += 1
+                f.parsed.diagnostics.append(dict(severity="WARNING", code="ACCOUNTS_CONFLICT",
+                    row_start=row["row"], row_end=row["row"], message="Pro známou rezervaci už platí jiné číslo Bookingu; řádek byl vynechán."))
             elif (vs, reservation) in symbols:
+                disposition = "KNOWN"
                 local["known"] += 1
             else:
+                disposition = "NEW"
                 reservations[reservation] = booking
                 symbols.add((vs, reservation))
                 accepted.append((f, row))
                 local["new"] += 1
+            f.parsed.account_outcomes.append(dict(row_start=row["row"], disposition=disposition))
         f.parsed.counters.update(local)
         for key in counts:
             counts[key] += local[key]
     return accepted, counts
 
 
-def commit(c, files, run_id, cancel=None):
+def commit(c, files, run_id, cancel=None, progress=None):
     accepted, counts = classify(c, files)
-    for f, row in accepted:
+    for index, (f, row) in enumerate(accepted):
+        notify(progress, "Ukládání vazeb", index, len(accepted))
         require(not (cancel and cancel.is_set()), "CANCELLED", "Import byl zrušen.")
         c.execute(
             "INSERT OR IGNORE INTO account_reservation VALUES(?,?,?)",
@@ -41,6 +52,8 @@ def commit(c, files, run_id, cancel=None):
             "INSERT INTO account_symbol VALUES(?,?,?,?,?,?)",
             (row["variable_symbol"], row["reservation"], f.file_id, run_id, f.parsed.sheet, row["row"]),
         )
+    if any(f.request.kind == "ACCOUNTS" for f in files):
+        notify(progress, "Ukládání vazeb", len(accepted), len(accepted))
     if accepted:
         c.execute("UPDATE domain_clock SET revision=revision+1 WHERE id=1")
     return counts

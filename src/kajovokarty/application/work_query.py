@@ -1,6 +1,7 @@
 """Bound, paged SQLite read projection. Financial commands never trust this view."""
 
 import json
+from kajovokarty.domain.payment_dates import payment_date
 from kajovokarty.domain.core import checked, search_tokens, search_normalize, require
 from kajovokarty.domain.columns import sql_token, display_value, sort_value
 
@@ -23,6 +24,7 @@ def choices(value):
 
 
 def query(c, filters, sort, page, page_size):
+    c.create_function("payment_date", 3, payment_date, deterministic=True)
     f = filters or {}
     tokens = search_tokens(f.get("text", ""))
     c.create_function(
@@ -42,7 +44,8 @@ def query(c, filters, sort, page, page_size):
       sum(CASE WHEN f.kind='CASHBOOK_CARD' THEN f.signed_amount_minor ELSE -f.signed_amount_minor END) difference,
       coalesce(sum(CASE WHEN f.kind='CASHBOOK_CARD' THEN f.signed_amount_minor END),
         sum(f.signed_amount_minor)) amount,
-      min(f.local_date) date,max(f.local_date) date_end,
+      min(payment_date(f.kind,f.local_date,f.canonical_json)) date,
+      max(payment_date(f.kind,f.local_date,f.canonical_json)) date_end,
       group_concat(DISTINCT f.kind) kinds, json_group_array(f.id) leaves
       FROM tree t JOIN work_object w ON w.id=t.id AND w.type='SOURCE'
       JOIN financial_source f ON f.id=w.source_id GROUP BY t.root
@@ -53,7 +56,7 @@ def query(c, filters, sort, page, page_size):
       FROM roots r JOIN aggregate_rows a ON a.root=r.id JOIN reconciliation_group g ON g.object_id=r.id
     UNION ALL
     SELECT r.*,CASE WHEN f.kind='CASHBOOK_CARD' THEN f.signed_amount_minor ELSE -f.signed_amount_minor END,
-      f.signed_amount_minor,1,f.kind,f.local_date,f.local_date,f.primary_identifier,f.description,'',json_array(f.id),0,'Dosud nepárováno',NULL
+      f.signed_amount_minor,1,f.kind,payment_date(f.kind,f.local_date,f.canonical_json),payment_date(f.kind,f.local_date,f.canonical_json),f.primary_identifier,f.description,'',json_array(f.id),0,'NOT_YET_MATCHED',NULL
       FROM roots r JOIN financial_source f ON f.id=r.source_id WHERE r.type='SOURCE'
     """)
     c.execute("CREATE UNIQUE INDEX temp.projection_id ON work_projection(id)")
@@ -68,6 +71,8 @@ def query(c, filters, sort, page, page_size):
     for key in ("currency", "type", "reason"):
         if f.get(key):
             vals = choices(f[key])
+            if key == "reason":
+                vals = ["NOT_YET_MATCHED" if value == "Dosud nepárováno" else value for value in vals]
             clauses.append(key + " IN (" + ",".join("?" for _ in vals) + ")")
             params.extend(vals)
     if f.get("kind"):

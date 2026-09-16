@@ -20,7 +20,7 @@ def test_metadata_changes_keep_existing_payment_and_do_not_duplicate(db, fixture
     first = csv_file(fixtures, tmp_path, "first.csv", lambda r: r[:1])
     def changed(rows):
         row = rows[0]
-        row[2:7] = ["bad date", "bad date", "JÃºlius VigaÅ¡", "Other provider spelling", "no_show"]
+        row[2:7] = ["bad date", "Aug 21, 2026", "JÃºlius VigaÅ¡", "Other provider spelling", "no_show"]
         return [row]
     second = csv_file(fixtures, tmp_path, "second.csv", changed)
     service = BookingImportService(db)

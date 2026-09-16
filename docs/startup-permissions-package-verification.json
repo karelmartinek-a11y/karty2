@@ -1,0 +1,14 @@
+{
+  "version": "0.4.4",
+  "packaged_modules_match_source": [
+    "kajovokarty",
+    "kajovokarty.infrastructure.file_storage",
+    "kajovokarty.infrastructure.database",
+    "kajovokarty.infrastructure.technical_log",
+    "kajovokarty.application.reset",
+    "kajovokarty.application.backup",
+    "kajovokarty.application.workspace",
+    "kajovokarty.bootstrap.main",
+    "kajovokarty.domain.errors"
+  ]
+}

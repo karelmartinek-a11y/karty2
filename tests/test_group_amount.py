@@ -2,6 +2,7 @@ import pytest
 
 from kajovokarty.application.work import WorkService
 from kajovokarty.ui.models import TableModel, WORK_COLUMNS
+from kajovokarty.domain.core import AppError
 from test_acceptance_traces import seed
 
 
@@ -28,6 +29,9 @@ def test_group_amount_represents_cash_total_or_counterparts(db, entries, amount,
     group(work, work.query(page_size=0)["rows"])
     row = work.query({"status": "all"})["rows"][0]
     assert row["amount"] == amount
+    from kajovokarty.application.pairing import PairingService
+    transferred = PairingService(db).resolve_draft_rows([row])[0]
+    assert transferred['amount'] == amount
     assert row["difference"] == difference
     assert row["resolved"] == (difference == 0)
     if amount == 11100 and difference == 0:
@@ -36,13 +40,13 @@ def test_group_amount_represents_cash_total_or_counterparts(db, entries, amount,
         assert model.data(model.index(0, 9)) == "0,00"
 
 
-def test_nested_group_counts_each_payment_once(db):
+def test_nested_groups_are_rejected(db):
     work = add_sources(db, [("CASHBOOK_CARD", "50.00"), ("CASHBOOK_CARD", "61.00"), ("BOOKING", "111.00")])
     rows = work.query(page_size=0)["rows"]
-    group(work, [r for r in rows if "CASHBOOK_CARD" in r["kinds"]])
-    group(work, work.query({"status": "all"}, page_size=0)["rows"])
-    row = work.query({"status": "resolved"})["rows"][0]
-    assert (row["amount"], row["difference"], row["leaf_count"]) == (11100, 0, 3)
+    first = group(work, [r for r in rows if "CASHBOOK_CARD" in r["kinds"]])
+    with pytest.raises(AppError, match="přímé platební"):
+        group(work, work.query({"status": "all"}, page_size=0)["rows"])
+    assert work.evidence(first["id"])["object"]["lifecycle"] == "ACTIVE"
 
 
 def test_amount_sort_and_filters_use_payment_value(db):

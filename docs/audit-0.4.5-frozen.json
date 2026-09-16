@@ -1,0 +1,14 @@
+{
+  "version": "0.4.5",
+  "frozen": true,
+  "checks": [
+    "import",
+    "qt_drag_details",
+    "save_group_live_views",
+    "qt_render_1100_1366_1700",
+    "exports",
+    "undo",
+    "backup_restore"
+  ],
+  "status": "PASS"
+}

@@ -7,9 +7,30 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QToolBar, QDialog, QPlainTextEdit
 from kajovokarty.ui.main import MainWindow
+from kajovokarty.ui.auto_result import result_text
 from kajovokarty.application.imports import ImportService, ImportInput
 from test_acceptance_traces import seed
 from test_gui import spin
+
+
+def test_auto_result_supports_date_fallback_rule_and_unknown_rules():
+    result = {
+        "analyzed_leaves": 2,
+        "newly_resolved_leaves": 2,
+        "created_groups": 1,
+        "rounds": 1,
+        "reached_fixed_point": True,
+        "limited_components": 0,
+        "invalid_helper_leaves": 0,
+        "by_currency": {},
+        "groups_by_rule": {"B_DATE": 1, "FUTURE_RULE": 2},
+        "operation_id": "test-operation",
+    }
+
+    text = result_text(result)
+
+    assert "Booking a pokladna podle data odjezdu a částky: 1" in text
+    assert "FUTURE_RULE: 2" in text
 
 
 @pytest.mark.parametrize("cancel_after_one", [False, True])

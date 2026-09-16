@@ -1,3 +1,5 @@
+> Historický dokument; aktuální pravidla a výsledky jsou v [SSOT](SSOT.md) a [auditu 0.4.5](AUDIT_0_4_5.md). Níže zachovaný obsah popisuje tehdejší stav.
+
 # Průběhové okno automatického párování — 0.3.2
 
 Po stisku **Automaticky spárovat vše** se ihned otevře samostatné okno. Během načítání nebo čekání na databázi používá neurčitý ukazatel; počet vstupů před jejich načtením zobrazuje jako neznámý. Spuštění automatiky zůstává výhradně na tlačítko.

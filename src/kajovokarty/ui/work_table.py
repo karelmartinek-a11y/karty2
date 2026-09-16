@@ -28,6 +28,9 @@ class WorkTable(QTableView):
         from kajovokarty.ui.column_filters import ColumnController
 
         ColumnController(self, model)
+        if any(key == 'kinds' for key, _ in model.columns):
+            from kajovokarty.ui.models import compact_payment_columns
+            compact_payment_columns(self)
 
     def keyPressEvent(self, event):
         if event.matches(QKeySequence.SelectAll):

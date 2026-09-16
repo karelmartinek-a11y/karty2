@@ -24,6 +24,7 @@ import json, re
 
 @pytest.fixture
 def wire():
-    s = (Path(__file__).parents[1] / "docs/SSOT.md").read_text(encoding="utf-8")
+    # Historical evidence compatibility is tested against the archived contract.
+    s = (Path(__file__).parents[1] / "docs/SSOT_0_3_ARCHIVE.md").read_text(encoding="utf-8")
     part = s.split("### A.4 Mock BetterHotel")[1]
     return json.loads(re.search(r"```json\n(.*?)\n```", part, re.S)[1])
