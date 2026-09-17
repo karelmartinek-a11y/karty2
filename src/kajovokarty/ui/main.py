@@ -408,7 +408,6 @@ class MainWindow(QMainWindow):
         self.view_timer.timeout.connect(self.save_columns)
         self.table.horizontalHeader().sectionResized.connect(self.persist_columns)
         self.table.horizontalHeader().sectionMoved.connect(self.persist_columns)
-        self.refresh()
 
     def run(
         self, fn, done=None, mutating=True, error_handler=None, progress_handler=None

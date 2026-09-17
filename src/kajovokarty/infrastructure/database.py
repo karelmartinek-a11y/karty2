@@ -249,7 +249,15 @@ class Database:
                 "kk_search_normalize", 1, search_normalize, deterministic=True
             )
             c.execute("PRAGMA foreign_keys=ON")
-            c.execute("PRAGMA journal_mode=WAL")
+            # Changing the journal mode requires a database-wide lock.  The
+            # application opens several read connections during startup and
+            # while refreshing the UI; setting WAL on every connection made
+            # those otherwise independent reads race and surface as DB_BUSY.
+            # Database initialization still enables WAL when it is needed,
+            # while established connections only read the current mode.
+            journal_mode = c.execute("PRAGMA journal_mode").fetchone()[0]
+            if str(journal_mode).lower() != "wal":
+                c.execute("PRAGMA journal_mode=WAL")
             c.execute("PRAGMA synchronous=FULL")
             c.execute("PRAGMA busy_timeout=5000")
             yield c
